@@ -1,0 +1,94 @@
+package durex
+
+import (
+	"time"
+)
+
+// Spec defines the specification for creating a command instance.
+// Use this when adding new commands to the executor.
+type Spec struct {
+	// Name is the command type identifier.
+	// Must match a registered command handler's Name().
+	Name string `json:"name"`
+
+	// Data contains the command payload.
+	// This data is persisted and available during execution.
+	Data M `json:"data,omitempty"`
+
+	// Delay postpones command execution by the specified duration.
+	// The command will be scheduled to run after this delay.
+	Delay time.Duration `json:"delay,omitempty"`
+
+	// Period sets the interval for repeating commands.
+	// When a command returns Repeat(), it will be rescheduled after this duration.
+	// If not set, defaults to executor's DefaultRepeatInterval.
+	Period time.Duration `json:"period,omitempty"`
+
+	// Deadline sets a relative deadline from now.
+	// If the command hasn't started by this time, Expired() is called instead.
+	// Takes precedence over DeadlineAt if both are set.
+	Deadline time.Duration `json:"deadline,omitempty"`
+
+	// DeadlineAt sets an absolute deadline.
+	// If the command hasn't started by this time, Expired() is called instead.
+	DeadlineAt *time.Time `json:"deadline_at,omitempty"`
+
+	// Retries is the number of retry attempts on failure.
+	// When a command returns an error, it will be retried up to this many times.
+	// After retries are exhausted, Recover() is called.
+	Retries int `json:"retries,omitempty"`
+
+	// Sequence defines a chain of commands to execute in order.
+	// When the current command completes, the next command in the sequence
+	// is automatically spawned with the accumulated data.
+	Sequence []string `json:"sequence,omitempty"`
+
+	// Priority sets the command's priority (higher = more important).
+	// Commands with higher priority are executed first when multiple
+	// commands are ready. Default is 0.
+	Priority int `json:"priority,omitempty"`
+
+	// Tags are optional labels for categorization and filtering.
+	Tags []string `json:"tags,omitempty"`
+}
+
+// WithData returns a copy of the Spec with the given data merged in.
+func (s Spec) WithData(data M) Spec {
+	if s.Data == nil {
+		s.Data = make(M)
+	}
+	for k, v := range data {
+		s.Data[k] = v
+	}
+	return s
+}
+
+// WithDelay returns a copy of the Spec with the given delay.
+func (s Spec) WithDelay(d time.Duration) Spec {
+	s.Delay = d
+	return s
+}
+
+// WithRetries returns a copy of the Spec with the given retry count.
+func (s Spec) WithRetries(n int) Spec {
+	s.Retries = n
+	return s
+}
+
+// WithDeadline returns a copy of the Spec with the given deadline.
+func (s Spec) WithDeadline(d time.Duration) Spec {
+	s.Deadline = d
+	return s
+}
+
+// WithPriority returns a copy of the Spec with the given priority.
+func (s Spec) WithPriority(p int) Spec {
+	s.Priority = p
+	return s
+}
+
+// WithTags returns a copy of the Spec with the given tags.
+func (s Spec) WithTags(tags ...string) Spec {
+	s.Tags = append(s.Tags, tags...)
+	return s
+}

@@ -1,0 +1,741 @@
+package durex
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// Common executor errors.
+var (
+	ErrExecutorStopped  = errors.New("durex: executor is stopped")
+	ErrExecutorNotReady = errors.New("durex: executor is not started")
+)
+
+// Executor manages command execution with persistence, retries, and scheduling.
+type Executor struct {
+	// Core components
+	registry *Registry
+	storage  Storage
+	logger   *slog.Logger
+	idGen    IDGenerator
+
+	// Configuration
+	parallelism           int
+	queueSize             int
+	defaultRetries        int
+	defaultRepeatInterval time.Duration
+	maxDelay              time.Duration
+	cleanupInterval       time.Duration
+	cleanupAge            time.Duration
+	shutdownTimeout       time.Duration
+	permanentCommands     []string
+
+	// Extensibility
+	middleware   []Middleware
+	metrics      MetricsCollector
+	errorHandler func(cmd *Instance, err error)
+
+	// Runtime state
+	queue    chan *Instance
+	wg       sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	started  atomic.Bool
+	stopping atomic.Bool
+	mu       sync.RWMutex
+}
+
+// New creates a new Executor with the given storage and options.
+func New(storage Storage, opts ...Option) *Executor {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	e := &Executor{
+		registry:              NewRegistry(),
+		storage:               storage,
+		logger:                slog.Default(),
+		idGen:                 &DefaultIDGenerator{},
+		parallelism:           4,
+		queueSize:             1000,
+		defaultRetries:        0,
+		defaultRepeatInterval: time.Minute,
+		maxDelay:              24 * time.Hour,
+		cleanupInterval:       time.Hour,
+		cleanupAge:            24 * time.Hour,
+		shutdownTimeout:       30 * time.Second,
+		ctx:                   ctx,
+		cancel:                cancel,
+	}
+
+	for _, opt := range opts {
+		opt(e)
+	}
+
+	e.queue = make(chan *Instance, e.queueSize)
+	return e
+}
+
+// Register adds a command handler to the executor.
+// Must be called before Start.
+func (e *Executor) Register(cmd Command) *Executor {
+	e.registry.Register(cmd)
+	return e
+}
+
+// Start begins processing commands.
+// It replays pending commands from storage and starts worker goroutines.
+func (e *Executor) Start(ctx context.Context) error {
+	if e.started.Load() {
+		return nil
+	}
+
+	e.logger.Info("durex: starting executor",
+		"parallelism", e.parallelism,
+		"registered_commands", e.registry.Count(),
+	)
+
+	// Start workers
+	for i := 0; i < e.parallelism; i++ {
+		e.wg.Add(1)
+		go e.worker(i)
+	}
+
+	// Start permanent commands
+	for _, name := range e.permanentCommands {
+		if err := e.startPermanentCommand(name); err != nil {
+			e.logger.Error("durex: failed to start permanent command",
+				"name", name,
+				"error", err,
+			)
+		}
+	}
+
+	// Start cleanup routine
+	if e.cleanupInterval > 0 {
+		go e.cleanupLoop()
+	}
+
+	e.started.Store(true)
+
+	// Replay pending commands
+	if err := e.replay(ctx); err != nil {
+		e.logger.Error("durex: failed to replay pending commands", "error", err)
+		return err
+	}
+
+	return nil
+}
+
+// Stop gracefully shuts down the executor.
+// It waits for in-flight commands to complete up to the shutdown timeout.
+func (e *Executor) Stop() error {
+	if !e.started.Load() || e.stopping.Load() {
+		return nil
+	}
+
+	e.stopping.Store(true)
+	e.logger.Info("durex: stopping executor")
+
+	// Signal shutdown
+	e.cancel()
+
+	// Wait for workers with timeout
+	done := make(chan struct{})
+	go func() {
+		e.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		e.logger.Info("durex: executor stopped gracefully")
+	case <-time.After(e.shutdownTimeout):
+		e.logger.Warn("durex: executor shutdown timed out")
+	}
+
+	e.started.Store(false)
+	return nil
+}
+
+// Add queues a new command for execution.
+func (e *Executor) Add(ctx context.Context, spec Spec) (*Instance, error) {
+	if !e.started.Load() {
+		return nil, ErrExecutorNotReady
+	}
+
+	instance, err := e.createInstance(spec)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := e.storage.Create(ctx, instance); err != nil {
+		return nil, fmt.Errorf("durex: failed to persist command: %w", err)
+	}
+
+	e.schedule(instance)
+
+	e.logger.Debug("durex: command added",
+		"id", instance.ID,
+		"name", instance.Name,
+		"delay", time.Until(instance.ReadyAt),
+	)
+
+	return instance, nil
+}
+
+// AddMany queues multiple commands for execution.
+func (e *Executor) AddMany(ctx context.Context, specs ...Spec) ([]*Instance, error) {
+	instances := make([]*Instance, len(specs))
+	for i, spec := range specs {
+		instance, err := e.Add(ctx, spec)
+		if err != nil {
+			return instances[:i], err
+		}
+		instances[i] = instance
+	}
+	return instances, nil
+}
+
+// Get retrieves a command instance by ID.
+func (e *Executor) Get(ctx context.Context, id string) (*Instance, error) {
+	return e.storage.Get(ctx, id)
+}
+
+// Cancel cancels a pending command.
+func (e *Executor) Cancel(ctx context.Context, id string) error {
+	instance, err := e.storage.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if instance.Status.IsTerminal() {
+		return fmt.Errorf("durex: cannot cancel command in status %s", instance.Status)
+	}
+
+	instance.Status = StatusCancelled
+	now := time.Now()
+	instance.CompletedAt = &now
+	return e.storage.Update(ctx, instance)
+}
+
+// Stats returns current executor statistics.
+func (e *Executor) Stats(ctx context.Context) (*Stats, error) {
+	pending, err := e.storage.Count(ctx, ptr(StatusPending))
+	if err != nil {
+		return nil, err
+	}
+
+	completed, err := e.storage.Count(ctx, ptr(StatusCompleted))
+	if err != nil {
+		return nil, err
+	}
+
+	failed, err := e.storage.Count(ctx, ptr(StatusFailed))
+	if err != nil {
+		return nil, err
+	}
+
+	return &Stats{
+		Pending:           pending,
+		Completed:         completed,
+		Failed:            failed,
+		QueueSize:         len(e.queue),
+		RegisteredCommands: e.registry.Count(),
+		WorkerCount:       e.parallelism,
+	}, nil
+}
+
+// Stats holds executor statistics.
+type Stats struct {
+	Pending            int64
+	Completed          int64
+	Failed             int64
+	QueueSize          int
+	RegisteredCommands int
+	WorkerCount        int
+}
+
+// worker processes commands from the queue.
+func (e *Executor) worker(id int) {
+	defer e.wg.Done()
+
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case instance, ok := <-e.queue:
+			if !ok {
+				return
+			}
+			if err := e.execute(instance); err != nil {
+				e.logger.Error("durex: command execution failed",
+					"id", instance.ID,
+					"name", instance.Name,
+					"error", err,
+				)
+			}
+		}
+	}
+}
+
+// execute runs a single command instance.
+func (e *Executor) execute(instance *Instance) error {
+	ctx := e.ctx
+	now := time.Now()
+
+	// Check if cancelled
+	if e.stopping.Load() {
+		return nil
+	}
+
+	// Check deadline
+	if instance.DeadlineAt != nil && now.After(*instance.DeadlineAt) {
+		return e.handleExpired(ctx, instance)
+	}
+
+	// Check if ready
+	if now.Before(instance.ReadyAt) {
+		e.scheduleDelayed(instance)
+		return nil
+	}
+
+	// Resolve handler
+	handler, err := e.registry.Resolve(instance.Name)
+	if err != nil {
+		instance.Status = StatusFailed
+		instance.Error = err.Error()
+		return e.storage.Update(ctx, instance)
+	}
+
+	// Update status to started
+	instance.Status = StatusStarted
+	instance.StartedAt = &now
+	instance.Attempt++
+	if err := e.storage.Update(ctx, instance); err != nil {
+		return err
+	}
+
+	// Collect metrics
+	if e.metrics != nil {
+		e.metrics.CommandStarted(instance.Name)
+	}
+
+	e.logger.Debug("durex: executing command",
+		"id", instance.ID,
+		"name", instance.Name,
+		"attempt", instance.Attempt,
+	)
+
+	// Execute with middleware
+	result, err := e.executeWithMiddleware(ctx, instance, handler)
+
+	// Record duration
+	duration := time.Since(now)
+
+	if err != nil {
+		if e.metrics != nil {
+			e.metrics.CommandFailed(instance.Name, err)
+		}
+		return e.handleError(ctx, instance, handler, err)
+	}
+
+	if e.metrics != nil {
+		e.metrics.CommandCompleted(instance.Name, duration)
+	}
+
+	return e.handleResult(ctx, instance, handler, result)
+}
+
+// executeWithMiddleware runs the command through the middleware chain.
+func (e *Executor) executeWithMiddleware(ctx context.Context, instance *Instance, handler Command) (Result, error) {
+	if len(e.middleware) == 0 {
+		return handler.Execute(ctx, instance)
+	}
+
+	// Build middleware chain
+	var chain func() (Result, error)
+	chain = func() (Result, error) {
+		return handler.Execute(ctx, instance)
+	}
+
+	for i := len(e.middleware) - 1; i >= 0; i-- {
+		mw := e.middleware[i]
+		next := chain
+		mwCtx := MiddlewareContext{
+			Command:  instance,
+			Handler:  handler,
+			Executor: e,
+		}
+		chain = func() (Result, error) {
+			return mw(mwCtx, next)
+		}
+	}
+
+	return chain()
+}
+
+// handleResult processes the execution result.
+func (e *Executor) handleResult(ctx context.Context, instance *Instance, handler Command, result Result) error {
+	now := time.Now()
+
+	// Handle repeat
+	if result.Repeat {
+		instance.Status = StatusRepeating
+		period := instance.Period
+		if period == 0 {
+			period = e.defaultRepeatInterval
+		}
+		instance.ReadyAt = now.Add(period)
+		if err := e.storage.Update(ctx, instance); err != nil {
+			return err
+		}
+		e.schedule(instance)
+		return nil
+	}
+
+	// Handle retry
+	if result.Retry {
+		if instance.Retries > 0 {
+			instance.Retries--
+			instance.Status = StatusPending
+			if e.metrics != nil {
+				e.metrics.CommandRetried(instance.Name, instance.Attempt)
+			}
+			if err := e.storage.Update(ctx, instance); err != nil {
+				return err
+			}
+			e.schedule(instance)
+			return nil
+		}
+	}
+
+	// Spawn children
+	for _, spec := range result.Commands {
+		child, err := e.createInstance(spec)
+		if err != nil {
+			e.logger.Error("durex: failed to create child command",
+				"parent_id", instance.ID,
+				"child_name", spec.Name,
+				"error", err,
+			)
+			continue
+		}
+		child.ParentID = &instance.ID
+
+		if err := e.storage.Create(ctx, child); err != nil {
+			e.logger.Error("durex: failed to persist child command",
+				"parent_id", instance.ID,
+				"child_id", child.ID,
+				"error", err,
+			)
+			continue
+		}
+		e.schedule(child)
+	}
+
+	// Mark completed
+	instance.Status = StatusCompleted
+	instance.CompletedAt = &now
+	return e.storage.Update(ctx, instance)
+}
+
+// handleError processes execution errors.
+func (e *Executor) handleError(ctx context.Context, instance *Instance, handler Command, err error) error {
+	now := time.Now()
+
+	e.logger.Warn("durex: command failed",
+		"id", instance.ID,
+		"name", instance.Name,
+		"attempt", instance.Attempt,
+		"retries_left", instance.Retries,
+		"error", err,
+	)
+
+	// Retry if possible
+	if instance.Retries > 0 {
+		instance.Retries--
+		instance.Status = StatusPending
+		instance.Error = err.Error()
+		if e.metrics != nil {
+			e.metrics.CommandRetried(instance.Name, instance.Attempt)
+		}
+		if err := e.storage.Update(ctx, instance); err != nil {
+			return err
+		}
+		e.schedule(instance)
+		return nil
+	}
+
+	// Mark failed
+	instance.Status = StatusFailed
+	instance.Error = err.Error()
+	instance.CompletedAt = &now
+	if updateErr := e.storage.Update(ctx, instance); updateErr != nil {
+		return updateErr
+	}
+
+	// Call error handler
+	if e.errorHandler != nil {
+		e.errorHandler(instance, err)
+	}
+
+	// Call Recover if implemented
+	if recoverable, ok := handler.(Recoverable); ok {
+		result, recoverErr := recoverable.Recover(ctx, instance, err)
+		if recoverErr != nil {
+			e.logger.Error("durex: recover failed",
+				"id", instance.ID,
+				"name", instance.Name,
+				"error", recoverErr,
+			)
+			return nil
+		}
+
+		// Spawn recovery commands
+		for _, spec := range result.Commands {
+			if _, err := e.Add(ctx, spec); err != nil {
+				e.logger.Error("durex: failed to add recovery command",
+					"error", err,
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+// handleExpired processes deadline expiration.
+func (e *Executor) handleExpired(ctx context.Context, instance *Instance) error {
+	now := time.Now()
+
+	e.logger.Warn("durex: command expired",
+		"id", instance.ID,
+		"name", instance.Name,
+		"deadline", instance.DeadlineAt,
+	)
+
+	instance.Status = StatusExpired
+	instance.CompletedAt = &now
+	if err := e.storage.Update(ctx, instance); err != nil {
+		return err
+	}
+
+	// Resolve handler for Expired callback
+	handler, err := e.registry.Resolve(instance.Name)
+	if err != nil {
+		return nil
+	}
+
+	// Call Expired if implemented
+	if expirable, ok := handler.(Expirable); ok {
+		result, expiredErr := expirable.Expired(ctx, instance)
+		if expiredErr != nil {
+			e.logger.Error("durex: expired handler failed",
+				"id", instance.ID,
+				"name", instance.Name,
+				"error", expiredErr,
+			)
+			return nil
+		}
+
+		// Spawn follow-up commands
+		for _, spec := range result.Commands {
+			if _, err := e.Add(ctx, spec); err != nil {
+				e.logger.Error("durex: failed to add expired follow-up command",
+					"error", err,
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+// schedule adds an instance to the execution queue.
+func (e *Executor) schedule(instance *Instance) {
+	delay := time.Until(instance.ReadyAt)
+
+	if delay <= 0 {
+		select {
+		case e.queue <- instance:
+		case <-e.ctx.Done():
+		}
+		return
+	}
+
+	e.scheduleDelayed(instance)
+}
+
+// scheduleDelayed schedules an instance for future execution.
+func (e *Executor) scheduleDelayed(instance *Instance) {
+	delay := time.Until(instance.ReadyAt)
+
+	// Cap delay to prevent timer issues
+	if delay > e.maxDelay {
+		delay = e.maxDelay
+	}
+
+	time.AfterFunc(delay, func() {
+		if e.stopping.Load() {
+			return
+		}
+		select {
+		case e.queue <- instance:
+		case <-e.ctx.Done():
+		}
+	})
+}
+
+// replay loads pending commands from storage.
+func (e *Executor) replay(ctx context.Context) error {
+	commands, err := e.storage.FindPending(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, cmd := range commands {
+		e.schedule(cmd)
+	}
+
+	e.logger.Info("durex: replayed pending commands", "count", len(commands))
+	return nil
+}
+
+// startPermanentCommand starts a permanent command.
+func (e *Executor) startPermanentCommand(name string) error {
+	handler, err := e.registry.Resolve(name)
+	if err != nil {
+		return err
+	}
+
+	// Get default spec
+	var spec Spec
+	if defaulter, ok := handler.(Defaulter); ok {
+		spec = defaulter.Default()
+	}
+	spec.Name = name
+
+	_, err = e.Add(e.ctx, spec)
+	return err
+}
+
+// cleanupLoop periodically cleans up old commands.
+func (e *Executor) cleanupLoop() {
+	ticker := time.NewTicker(e.cleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-ticker.C:
+			count, err := e.storage.Cleanup(e.ctx, e.cleanupAge)
+			if err != nil {
+				e.logger.Error("durex: cleanup failed", "error", err)
+			} else if count > 0 {
+				e.logger.Debug("durex: cleaned up old commands", "count", count)
+			}
+		}
+	}
+}
+
+// createInstance creates a new Instance from a Spec.
+func (e *Executor) createInstance(spec Spec) (*Instance, error) {
+	// Validate
+	if spec.Name == "" {
+		return nil, errors.New("durex: command name is required")
+	}
+
+	// Get defaults from handler
+	if handler, err := e.registry.Resolve(spec.Name); err == nil {
+		if defaulter, ok := handler.(Defaulter); ok {
+			defaults := defaulter.Default()
+			spec = mergeSpecs(defaults, spec)
+		}
+	}
+
+	now := time.Now()
+	readyAt := now.Add(spec.Delay)
+
+	instance := &Instance{
+		ID:        e.idGen.Generate(),
+		Name:      spec.Name,
+		Data:      spec.Data,
+		Status:    StatusPending,
+		Retries:   spec.Retries,
+		Sequence:  spec.Sequence,
+		Priority:  spec.Priority,
+		Tags:      spec.Tags,
+		CreatedAt: now,
+		ReadyAt:   readyAt,
+		Period:    spec.Period,
+		Attempt:   0,
+	}
+
+	// Apply default retries if not specified
+	if instance.Retries == 0 && e.defaultRetries > 0 {
+		instance.Retries = e.defaultRetries
+	}
+
+	// Set deadline
+	if spec.DeadlineAt != nil {
+		instance.DeadlineAt = spec.DeadlineAt
+	} else if spec.Deadline > 0 {
+		deadline := now.Add(spec.Deadline)
+		instance.DeadlineAt = &deadline
+	}
+
+	return instance, nil
+}
+
+// mergeSpecs merges default spec with user spec (user takes precedence).
+func mergeSpecs(defaults, user Spec) Spec {
+	result := defaults
+
+	if user.Name != "" {
+		result.Name = user.Name
+	}
+	if user.Data != nil {
+		if result.Data == nil {
+			result.Data = make(M)
+		}
+		for k, v := range user.Data {
+			result.Data[k] = v
+		}
+	}
+	if user.Delay != 0 {
+		result.Delay = user.Delay
+	}
+	if user.Period != 0 {
+		result.Period = user.Period
+	}
+	if user.Deadline != 0 {
+		result.Deadline = user.Deadline
+	}
+	if user.DeadlineAt != nil {
+		result.DeadlineAt = user.DeadlineAt
+	}
+	if user.Retries != 0 {
+		result.Retries = user.Retries
+	}
+	if len(user.Sequence) > 0 {
+		result.Sequence = user.Sequence
+	}
+	if user.Priority != 0 {
+		result.Priority = user.Priority
+	}
+	if len(user.Tags) > 0 {
+		result.Tags = user.Tags
+	}
+
+	return result
+}
+
+// ptr returns a pointer to the given value.
+func ptr[T any](v T) *T {
+	return &v
+}
