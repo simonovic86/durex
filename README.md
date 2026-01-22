@@ -6,16 +6,16 @@
 
 **Durable Execution Framework for Go**
 
-Durex enables you to build reliable, persistent command/task execution systems with automatic retries, deadlines, and recovery from failures. It's inspired by patterns from job queues, workflow engines, and saga orchestrators.
+Durex enables you to build reliable, persistent command/task execution systems with automatic retries, deadlines, and recovery from failures.
 
 ## Features
 
 - 🔄 **Persistent Commands** - Commands survive process restarts
-- 🔁 **Automatic Retries** - Configurable retry logic with customizable handling
+- 🔁 **Automatic Retries** - Configurable retry logic
 - ⏰ **Deadlines** - Time-bound execution with expiration handlers
-- 🔗 **Command Chaining** - Build workflows with sequences
-- 🛡️ **Recovery** - Custom error handling and compensation patterns
-- 🔌 **Middleware** - Extensible execution pipeline
+- 🔗 **Workflows** - Chain commands together with sequences
+- 🛡️ **Recovery** - Custom error handling and compensation (saga pattern)
+- 🎯 **Type Safety** - Generic typed commands with `HandleTyped[T]`
 - 💾 **Multiple Backends** - PostgreSQL, SQLite, In-Memory
 
 ## Installation
@@ -26,7 +26,78 @@ go get github.com/simonovic86/durex
 
 ## Quick Start
 
-### 1. Define a Command
+```go
+package main
+
+import (
+    "context"
+    "github.com/simonovic86/durex"
+    "github.com/simonovic86/durex/storage"
+)
+
+func main() {
+    // Create executor
+    executor := durex.New(storage.NewMemory())
+
+    // Register a command - just a function!
+    executor.HandleFunc("greet", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+        name := cmd.GetString("name")
+        fmt.Printf("Hello, %s!\n", name)
+        return durex.Empty(), nil
+    })
+
+    // Start processing
+    executor.Start(context.Background())
+    defer executor.Stop()
+
+    // Add a command
+    executor.Add(ctx, durex.Spec{
+        Name: "greet",
+        Data: durex.M{"name": "World"},
+    })
+}
+```
+
+## Three Ways to Create Commands
+
+### 1. Simple Function (Recommended)
+
+```go
+// Basic - just a function
+executor.HandleFunc("sendEmail", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    to := cmd.GetString("to")
+    return mailer.Send(to), nil
+})
+
+// With options
+executor.HandleFunc("sendEmail", sendEmailFn,
+    durex.Retries(3),
+    durex.OnRecover(handleFailure),
+    durex.OnExpired(handleTimeout),
+)
+```
+
+### 2. Typed Function (Type-Safe Data)
+
+```go
+type EmailData struct {
+    To      string `json:"to"`
+    Subject string `json:"subject"`
+}
+
+// No more GetString() - data is typed!
+durex.HandleTyped(executor, "sendEmail", func(ctx context.Context, data EmailData, cmd *durex.Instance) (durex.Result, error) {
+    return mailer.Send(data.To, data.Subject), nil
+}, durex.WithRetries[EmailData](3))
+
+// Add with typed data
+executor.Add(ctx, durex.Typed("sendEmail", EmailData{
+    To:      "user@example.com",
+    Subject: "Welcome!",
+}))
+```
+
+### 3. Struct (When You Need Dependencies)
 
 ```go
 type SendEmailCommand struct {
@@ -34,300 +105,145 @@ type SendEmailCommand struct {
     mailer *MailService
 }
 
-func (c *SendEmailCommand) Name() string {
-    return "sendEmail"
-}
+func (c *SendEmailCommand) Name() string { return "sendEmail" }
 
 func (c *SendEmailCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-    to := cmd.GetString("to")
-    subject := cmd.GetString("subject")
-    body := cmd.GetString("body")
-
-    if err := c.mailer.Send(to, subject, body); err != nil {
-        return durex.Empty(), err  // Will retry if retries > 0
-    }
-
-    return durex.Empty(), nil
+    return c.mailer.Send(cmd.GetString("to")), nil
 }
-
-// Optional: handle permanent failures
-func (c *SendEmailCommand) Recover(ctx context.Context, cmd *durex.Instance, err error) (durex.Result, error) {
-    log.Printf("Email to %s failed permanently: %v", cmd.GetString("to"), err)
-    return durex.Empty(), nil
-}
-
-// Optional: provide defaults
-func (c *SendEmailCommand) Default() durex.Spec {
-    return durex.Spec{
-        Retries: 3,
-    }
-}
-```
-
-### 2. Create an Executor
-
-```go
-import (
-    "github.com/simonovic86/durex"
-    "github.com/simonovic86/durex/storage"
-)
-
-// Use in-memory storage for development
-store := storage.NewMemory()
-
-// Or PostgreSQL for production
-// db, _ := sql.Open("postgres", "postgres://...")
-// store := storage.NewPostgres(db)
-// store.Migrate(ctx)
-
-executor := durex.New(store,
-    durex.WithParallelism(4),
-    durex.WithDefaultRetries(3),
-    durex.WithLogger(slog.Default()),
-)
 
 executor.Register(&SendEmailCommand{mailer: mailerService})
-executor.Start(ctx)
-defer executor.Stop()
-```
-
-### 3. Add Commands
-
-```go
-// Simple command
-executor.Add(ctx, durex.Spec{
-    Name: "sendEmail",
-    Data: durex.M{
-        "to":      "user@example.com",
-        "subject": "Welcome!",
-        "body":    "Thanks for signing up.",
-    },
-})
-
-// Delayed command
-executor.Add(ctx, durex.Spec{
-    Name:  "sendEmail",
-    Delay: 5 * time.Minute,
-    Data:  durex.M{"to": "user@example.com"},
-})
-
-// Command with deadline
-executor.Add(ctx, durex.Spec{
-    Name:     "processOrder",
-    Deadline: 30 * time.Second,
-    Data:     durex.M{"orderId": "12345"},
-})
 ```
 
 ## Command Results
 
-Commands return a `Result` that tells the executor what to do next:
-
 | Result | Description |
 |--------|-------------|
-| `durex.Empty()` | Command completed, no follow-up |
-| `durex.Repeat()` | Reschedule to run again after Period |
-| `durex.Retry()` | Retry immediately (uses retry counter) |
-| `durex.Next(spec)` | Spawn a single follow-up command |
+| `durex.Empty()` | Done, no follow-up |
+| `durex.Repeat()` | Run again after Period |
+| `durex.Retry()` | Retry immediately |
+| `durex.Next(spec)` | Spawn one command |
 | `durex.Spawn(specs...)` | Spawn multiple commands |
 
-## Command Chaining (Workflows)
-
-Build multi-step workflows by chaining commands:
+## Workflows (Command Chaining)
 
 ```go
+// Register steps
+executor.HandleFunc("step1", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    cmd.Set("validated", true)  // Pass data to next step
+    return cmd.ContinueSequence(nil), nil
+})
+
+executor.HandleFunc("step2", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    validated := cmd.GetBool("validated")  // Receive data from previous step
+    return cmd.ContinueSequence(nil), nil
+})
+
+// Execute workflow: step1 → step2 → step3
 executor.Add(ctx, durex.Spec{
-    Name:     "validateOrder",
-    Sequence: []string{"processPayment", "shipOrder", "sendConfirmation"},
-    Data:     durex.M{"orderId": "12345"},
+    Name:     "step1",
+    Sequence: []string{"step2", "step3"},
+    Data:     durex.M{"orderId": "123"},
 })
 ```
 
-Each command continues the sequence:
+## Repeating Commands (Cron-like)
 
 ```go
-func (c *ValidateOrderCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-    // Validate...
-    cmd.Set("validated", true)  // Data is passed to next command
-    return cmd.ContinueSequence(nil), nil
-}
+executor.HandleFunc("cleanup", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    // cleanup logic...
+    return durex.Repeat(), nil  // Run again after period
+}, durex.Period(time.Hour))
 ```
 
-## Repeating Commands
-
-Create commands that run on a schedule:
+## Error Recovery (Saga Pattern)
 
 ```go
-type CleanupCommand struct {
-    durex.BaseCommand
-}
-
-func (c *CleanupCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-    // Cleanup logic...
-    return durex.Repeat(), nil  // Run again after Period
-}
-
-func (c *CleanupCommand) Default() durex.Spec {
-    return durex.Spec{
-        Period: time.Hour,
-    }
-}
+executor.HandleFunc("processPayment", processPayment,
+    durex.Retries(3),
+    durex.OnRecover(func(ctx context.Context, cmd *durex.Instance, err error) (durex.Result, error) {
+        // Payment failed - spawn compensation commands
+        return durex.Spawn(
+            durex.Spec{Name: "refundPayment", Data: cmd.Data},
+            durex.Spec{Name: "releaseInventory", Data: cmd.Data},
+            durex.Spec{Name: "notifyCustomer", Data: durex.M{"error": err.Error()}},
+        ), nil
+    }),
+)
 ```
 
-## Error Handling & Recovery
-
-Implement the `Recoverable` interface for custom error handling:
+## Delayed Execution
 
 ```go
-func (c *ProcessPaymentCommand) Recover(ctx context.Context, cmd *durex.Instance, err error) (durex.Result, error) {
-    // Spawn compensation commands (saga pattern)
-    return durex.Spawn(
-        durex.Spec{Name: "refundPayment", Data: cmd.Data},
-        durex.Spec{Name: "notifyFailure", Data: durex.M{"error": err.Error()}},
-    ), nil
-}
+executor.Add(ctx, durex.Spec{
+    Name:  "sendReminder",
+    Delay: 24 * time.Hour,  // Run tomorrow
+    Data:  durex.M{"userId": "123"},
+})
 ```
 
 ## Deadlines
 
-Set execution deadlines and handle expiration:
-
 ```go
-executor.Add(ctx, durex.Spec{
-    Name:     "timeoutSensitiveTask",
-    Deadline: 5 * time.Minute,
-})
-
-// Implement Expirable to handle timeout
-func (c *MyCommand) Expired(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-    log.Printf("Command %s expired", cmd.ID)
-    return durex.Next(durex.Spec{Name: "handleTimeout"}), nil
-}
-```
-
-## Middleware
-
-Add cross-cutting concerns:
-
-```go
-executor := durex.New(store,
-    durex.WithMiddleware(
-        // Logging middleware
-        func(ctx durex.MiddlewareContext, next func() (durex.Result, error)) (durex.Result, error) {
-            start := time.Now()
-            result, err := next()
-            slog.Info("Command executed",
-                "name", ctx.Command.Name,
-                "duration", time.Since(start),
-            )
-            return result, err
-        },
-        // Metrics middleware
-        func(ctx durex.MiddlewareContext, next func() (durex.Result, error)) (durex.Result, error) {
-            metrics.CommandStarted(ctx.Command.Name)
-            result, err := next()
-            if err != nil {
-                metrics.CommandFailed(ctx.Command.Name)
-            } else {
-                metrics.CommandCompleted(ctx.Command.Name)
-            }
-            return result, err
-        },
-    ),
+executor.HandleFunc("timeoutTask", taskFn,
+    durex.Deadline(5*time.Minute),
+    durex.OnExpired(func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+        log.Println("Task timed out!")
+        return durex.Empty(), nil
+    }),
 )
 ```
 
 ## Storage Backends
 
-### In-Memory (Testing/Development)
-
 ```go
+// In-memory (development/testing)
 store := storage.NewMemory()
-```
 
-### SQLite (Single Instance)
-
-```go
-store, err := storage.OpenSQLite("commands.db")
-if err != nil {
-    log.Fatal(err)
-}
+// SQLite (single instance)
+store, _ := storage.OpenSQLite("commands.db")
 store.Migrate(ctx)
-```
 
-### PostgreSQL (Production)
-
-```go
-db, err := sql.Open("postgres", "postgres://user:pass@localhost/db")
-if err != nil {
-    log.Fatal(err)
-}
-
+// PostgreSQL (production)
+db, _ := sql.Open("postgres", "postgres://...")
 store := storage.NewPostgres(db)
 store.Migrate(ctx)
 ```
 
-## Configuration Options
+## Configuration
 
 ```go
 executor := durex.New(store,
     durex.WithParallelism(8),              // Worker count
-    durex.WithLogger(slog.Default()),       // Custom logger
-    durex.WithDefaultRetries(3),            // Default retry count
-    durex.WithDefaultRepeatInterval(time.Minute), // Default repeat period
-    durex.WithMaxDelay(24 * time.Hour),     // Max scheduling delay
-    durex.WithCleanupInterval(time.Hour),   // Auto-cleanup interval
-    durex.WithCleanupAge(7 * 24 * time.Hour), // Cleanup age threshold
-    durex.WithGracefulShutdown(30 * time.Second), // Shutdown timeout
-    durex.WithPermanentCommands("cleanup", "monitor"), // Always-running commands
-    durex.WithErrorHandler(func(cmd *durex.Instance, err error) {
-        alerting.Notify(err)
-    }),
+    durex.WithDefaultRetries(3),            // Default retries
+    durex.WithCleanupInterval(time.Hour),   // Auto-cleanup
+    durex.WithGracefulShutdown(30*time.Second),
+    durex.WithMiddleware(loggingMiddleware),
 )
 ```
 
-## Command Instance Data Access
+## Middleware
 
 ```go
-func (c *MyCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-    // Type-safe accessors
-    str := cmd.GetString("key")
-    num := cmd.GetInt("count")
-    flag := cmd.GetBool("enabled")
-    list := cmd.GetSlice("items")
-    obj := cmd.GetMap("nested")
-
-    // Set data (for passing to sequence)
-    cmd.Set("result", "value")
-
-    // Check metadata
-    if cmd.IsOverdue() { ... }
-    if cmd.HasTag("priority") { ... }
-
-    return durex.Empty(), nil
+func loggingMiddleware(ctx durex.MiddlewareContext, next func() (durex.Result, error)) (durex.Result, error) {
+    start := time.Now()
+    result, err := next()
+    slog.Info("Command executed", "name", ctx.Command.Name, "duration", time.Since(start))
+    return result, err
 }
 ```
 
-## Best Practices
-
-1. **Idempotency**: Design commands to be safely re-executable
-2. **Small Commands**: Keep commands focused on single responsibilities
-3. **Proper Retries**: Use retries for transient failures, not logic errors
-4. **Deadlines**: Set realistic deadlines for time-sensitive operations
-5. **Compensation**: Implement Recover for proper rollback/cleanup
-6. **Monitoring**: Use middleware for observability
-
 ## Examples
 
-See the [examples](./examples) directory for complete working examples:
+See [examples/basic](./examples/basic) and [examples/workflow](./examples/workflow) for complete working examples.
 
-- `basic/` - Simple commands with retries and delays
-- `workflow/` - E-commerce order processing pipeline
+```bash
+# Run basic example
+go run ./examples/basic
+
+# Run e-commerce workflow example  
+go run ./examples/workflow
+```
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+MIT License - see [LICENSE](LICENSE)

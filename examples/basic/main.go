@@ -1,4 +1,4 @@
-// Package main demonstrates basic usage of the durex framework.
+// Example: Basic durex usage with functional commands
 package main
 
 import (
@@ -14,219 +14,140 @@ import (
 	"github.com/simonovic86/durex/storage"
 )
 
-// SendEmailCommand demonstrates a simple command with retry logic.
-type SendEmailCommand struct {
-	durex.BaseCommand
-}
-
-func (c *SendEmailCommand) Name() string {
-	return "sendEmail"
-}
-
-func (c *SendEmailCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-	to := cmd.GetString("to")
-	subject := cmd.GetString("subject")
-
-	slog.Info("Sending email",
-		"to", to,
-		"subject", subject,
-		"attempt", cmd.Attempt,
-	)
-
-	// Simulate occasional failure
-	if cmd.Attempt < 2 {
-		return durex.Empty(), fmt.Errorf("simulated failure")
-	}
-
-	slog.Info("Email sent successfully", "to", to)
-	return durex.Empty(), nil
-}
-
-func (c *SendEmailCommand) Recover(ctx context.Context, cmd *durex.Instance, err error) (durex.Result, error) {
-	slog.Error("Email sending failed permanently",
-		"to", cmd.GetString("to"),
-		"error", err,
-	)
-	return durex.Empty(), nil
-}
-
-func (c *SendEmailCommand) Default() durex.Spec {
-	return durex.Spec{
-		Name:    "sendEmail",
-		Retries: 3,
-	}
-}
-
-// CleanupCommand demonstrates a repeating command.
-type CleanupCommand struct {
-	durex.BaseCommand
-}
-
-func (c *CleanupCommand) Name() string {
-	return "cleanup"
-}
-
-func (c *CleanupCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-	slog.Info("Running cleanup task", "time", time.Now().Format(time.RFC3339))
-	return durex.Repeat(), nil
-}
-
-func (c *CleanupCommand) Default() durex.Spec {
-	return durex.Spec{
-		Name:   "cleanup",
-		Period: 10 * time.Second,
-	}
-}
-
-// ProcessOrderCommand demonstrates command chaining with sequences.
-type ProcessOrderCommand struct {
-	durex.BaseCommand
-}
-
-func (c *ProcessOrderCommand) Name() string {
-	return "processOrder"
-}
-
-func (c *ProcessOrderCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-	orderID := cmd.GetString("orderId")
-	slog.Info("Processing order", "orderId", orderID)
-
-	// Add some computed data for the next step
-	cmd.Set("processedAt", time.Now().Format(time.RFC3339))
-
-	return cmd.ContinueSequence(nil), nil
-}
-
-// ValidatePaymentCommand is the second step in the order sequence.
-type ValidatePaymentCommand struct {
-	durex.BaseCommand
-}
-
-func (c *ValidatePaymentCommand) Name() string {
-	return "validatePayment"
-}
-
-func (c *ValidatePaymentCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-	orderID := cmd.GetString("orderId")
-	processedAt := cmd.GetString("processedAt")
-
-	slog.Info("Validating payment",
-		"orderId", orderID,
-		"processedAt", processedAt,
-	)
-
-	cmd.Set("paymentValidated", true)
-	return cmd.ContinueSequence(nil), nil
-}
-
-// ShipOrderCommand is the final step in the order sequence.
-type ShipOrderCommand struct {
-	durex.BaseCommand
-}
-
-func (c *ShipOrderCommand) Name() string {
-	return "shipOrder"
-}
-
-func (c *ShipOrderCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
-	orderID := cmd.GetString("orderId")
-
-	slog.Info("Order shipped!", "orderId", orderID)
-	return durex.Empty(), nil
-}
-
 func main() {
-	// Configure structured logging
+	// Pretty logging
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	})))
 
-	// Create in-memory storage (use PostgreSQL or SQLite for production)
-	store := storage.NewMemory()
-
-	// Create executor with options
-	executor := durex.New(store,
+	// Create executor with in-memory storage
+	executor := durex.New(storage.NewMemory(),
 		durex.WithParallelism(4),
-		durex.WithLogger(slog.Default()),
-		durex.WithDefaultRetries(2),
-		durex.WithCleanupInterval(time.Minute),
 	)
 
-	// Register command handlers
-	executor.Register(&SendEmailCommand{})
-	executor.Register(&CleanupCommand{})
-	executor.Register(&ProcessOrderCommand{})
-	executor.Register(&ValidatePaymentCommand{})
-	executor.Register(&ShipOrderCommand{})
+	// ============================================
+	// Register commands using simple functions
+	// ============================================
 
-	// Start the executor
+	// Simple command - just a function!
+	executor.HandleFunc("greet", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+		name := cmd.GetString("name")
+		slog.Info("👋 Hello!", "name", name)
+		return durex.Empty(), nil
+	})
+
+	// Command with retries
+	executor.HandleFunc("sendEmail", sendEmail,
+		durex.Retries(3),
+		durex.OnRecover(func(ctx context.Context, cmd *durex.Instance, err error) (durex.Result, error) {
+			slog.Error("📧 Email permanently failed", "to", cmd.GetString("to"), "error", err)
+			return durex.Empty(), nil
+		}),
+	)
+
+	// Repeating command (like cron)
+	executor.HandleFunc("heartbeat", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+		slog.Info("💓 Heartbeat", "time", time.Now().Format("15:04:05"))
+		return durex.Repeat(), nil
+	}, durex.Period(5*time.Second))
+
+	// Command that spawns children
+	executor.HandleFunc("notifyAll", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+		users := []string{"alice@example.com", "bob@example.com", "carol@example.com"}
+		
+		specs := make([]durex.Spec, len(users))
+		for i, user := range users {
+			specs[i] = durex.Spec{
+				Name: "sendEmail",
+				Data: durex.M{"to": user, "subject": "Announcement!"},
+			}
+		}
+		
+		slog.Info("📢 Notifying all users", "count", len(users))
+		return durex.Spawn(specs...), nil
+	})
+
+	// Chained workflow using sequence
+	executor.HandleFunc("step1", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+		slog.Info("🔷 Step 1: Validating", "orderId", cmd.GetString("orderId"))
+		cmd.Set("validated", true)
+		return cmd.ContinueSequence(nil), nil
+	})
+
+	executor.HandleFunc("step2", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+		slog.Info("🔷 Step 2: Processing", "orderId", cmd.GetString("orderId"), "validated", cmd.GetBool("validated"))
+		cmd.Set("processed", true)
+		return cmd.ContinueSequence(nil), nil
+	})
+
+	executor.HandleFunc("step3", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+		slog.Info("🔷 Step 3: Complete!", "orderId", cmd.GetString("orderId"))
+		return durex.Empty(), nil
+	})
+
+	// Start executor
 	ctx := context.Background()
-	if err := executor.Start(ctx); err != nil {
-		slog.Error("Failed to start executor", "error", err)
-		os.Exit(1)
-	}
+	executor.Start(ctx)
+	defer executor.Stop()
 
-	slog.Info("Durex executor started")
+	slog.Info("🚀 Durex started! Adding some commands...")
 
-	// Add some example commands
-	//
-	// 1. Simple email command with retries
-	_, err := executor.Add(ctx, durex.Spec{
+	// ============================================
+	// Add commands to execute
+	// ============================================
+
+	// Simple greeting
+	executor.Add(ctx, durex.Spec{
+		Name: "greet",
+		Data: durex.M{"name": "World"},
+	})
+
+	// Email with retries (will fail twice, succeed on third)
+	executor.Add(ctx, durex.Spec{
 		Name: "sendEmail",
-		Data: durex.M{
-			"to":      "user@example.com",
-			"subject": "Welcome to Durex!",
-			"body":    "Thanks for trying out our framework.",
-		},
+		Data: durex.M{"to": "test@example.com", "subject": "Hello!"},
 	})
-	if err != nil {
-		slog.Error("Failed to add email command", "error", err)
-	}
 
-	// 2. Command chain (order processing workflow)
-	_, err = executor.Add(ctx, durex.Spec{
-		Name:     "processOrder",
-		Sequence: []string{"validatePayment", "shipOrder"},
-		Data: durex.M{
-			"orderId": "ORD-12345",
-			"amount":  99.99,
-		},
+	// Fan-out to multiple users
+	executor.Add(ctx, durex.Spec{Name: "notifyAll"})
+
+	// Workflow: step1 → step2 → step3
+	executor.Add(ctx, durex.Spec{
+		Name:     "step1",
+		Sequence: []string{"step2", "step3"},
+		Data:     durex.M{"orderId": "ORD-001"},
 	})
-	if err != nil {
-		slog.Error("Failed to add order command", "error", err)
-	}
 
-	// 3. Scheduled command with delay
-	_, err = executor.Add(ctx, durex.Spec{
-		Name:  "sendEmail",
-		Delay: 5 * time.Second,
-		Data: durex.M{
-			"to":      "delayed@example.com",
-			"subject": "Delayed email",
-		},
+	// Delayed command
+	executor.Add(ctx, durex.Spec{
+		Name:  "greet",
+		Data:  durex.M{"name": "Delayed User"},
+		Delay: 3 * time.Second,
 	})
-	if err != nil {
-		slog.Error("Failed to add delayed command", "error", err)
-	}
 
-	// 4. Repeating cleanup command
-	_, err = executor.Add(ctx, durex.Spec{
-		Name: "cleanup",
-	})
-	if err != nil {
-		slog.Error("Failed to add cleanup command", "error", err)
-	}
+	// Start heartbeat
+	executor.Add(ctx, durex.Spec{Name: "heartbeat"})
 
-	// Wait for shutdown signal
+	// Wait for Ctrl+C
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	<-sigCh
-	slog.Info("Shutting down...")
 
-	if err := executor.Stop(); err != nil {
-		slog.Error("Error stopping executor", "error", err)
+	slog.Info("👋 Shutting down...")
+}
+
+// sendEmail simulates sending an email with occasional failures
+func sendEmail(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+	to := cmd.GetString("to")
+	subject := cmd.GetString("subject")
+
+	slog.Info("📧 Sending email", "to", to, "subject", subject, "attempt", cmd.Attempt)
+
+	// Simulate failure on first 2 attempts
+	if cmd.Attempt < 3 {
+		return durex.Empty(), fmt.Errorf("temporary SMTP error")
 	}
 
-	slog.Info("Goodbye!")
+	slog.Info("✅ Email sent!", "to", to)
+	return durex.Empty(), nil
 }
