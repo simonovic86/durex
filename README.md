@@ -18,6 +18,35 @@ Durex enables you to build reliable, persistent command/task execution systems w
 - 🎯 **Type Safety** - Generic typed commands with `HandleTyped[T]`
 - 💾 **Multiple Backends** - PostgreSQL, SQLite, In-Memory
 
+## Architecture
+
+```mermaid
+graph TB
+    subgraph Your Application
+        A[App Code]
+    end
+    
+    subgraph Durex
+        B[Executor]
+        C[Command Registry]
+        D[Worker Pool]
+    end
+    
+    subgraph Storage Backends
+        E[(PostgreSQL)]
+        F[(SQLite)]
+        G[(Memory)]
+    end
+    
+    A -->|Add/HandleFunc| B
+    B --> C
+    B --> D
+    D -->|Execute| C
+    B <-->|Persist/Fetch| E
+    B <-->|Persist/Fetch| F
+    B <-->|Persist/Fetch| G
+```
+
 ## Installation
 
 ```bash
@@ -124,7 +153,41 @@ executor.Register(&SendEmailCommand{mailer: mailerService})
 | `durex.Next(spec)` | Spawn one command |
 | `durex.Spawn(specs...)` | Spawn multiple commands |
 
+### Command Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: Add()
+    Pending --> Running: Worker picks up
+    Running --> Completed: Success
+    Running --> Failed: Error (retries exhausted)
+    Running --> Pending: Retry / Repeat
+    Running --> Expired: Deadline exceeded
+    Expired --> [*]: OnExpired handler
+    Failed --> [*]: OnRecover handler
+    Completed --> [*]
+```
+
 ## Workflows (Command Chaining)
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Executor
+    participant step1
+    participant step2
+    participant step3
+    
+    App->>Executor: Add(Spec with Sequence)
+    Executor->>step1: Execute
+    Note right of step1: Set("validated", true)
+    step1-->>Executor: ContinueSequence()
+    Executor->>step2: Execute (data passed)
+    Note right of step2: GetBool("validated")
+    step2-->>Executor: ContinueSequence()
+    Executor->>step3: Execute
+    step3-->>Executor: Empty()
+```
 
 ```go
 // Register steps
@@ -156,6 +219,20 @@ executor.HandleFunc("cleanup", func(ctx context.Context, cmd *durex.Instance) (d
 ```
 
 ## Error Recovery (Saga Pattern)
+
+```mermaid
+graph TD
+    A[processPayment] -->|retries exhausted| B[OnRecover Handler]
+    B -->|Spawn| C[refundPayment]
+    B -->|Spawn| D[releaseInventory]
+    B -->|Spawn| E[notifyCustomer]
+    
+    style A fill:#ff6b6b,color:#fff
+    style B fill:#ffd93d,color:#333
+    style C fill:#6bcb77,color:#fff
+    style D fill:#6bcb77,color:#fff
+    style E fill:#6bcb77,color:#fff
+```
 
 ```go
 executor.HandleFunc("processPayment", processPayment,
