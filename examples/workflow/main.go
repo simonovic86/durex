@@ -89,7 +89,7 @@ func main() {
 		durex.WithDeadline[OrderData](30*time.Second),
 		durex.WithRecover(func(ctx context.Context, data OrderData, cmd *durex.Instance, err error) (durex.Result, error) {
 			slog.Error("💳 Payment failed - rolling back", "orderId", data.OrderID)
-			
+
 			// Spawn compensation commands
 			return durex.Spawn(
 				durex.Typed("releaseInventory", data),
@@ -113,7 +113,7 @@ func main() {
 
 	// Step 5: Send Confirmation
 	durex.HandleTyped(executor, "sendConfirmation", func(ctx context.Context, data OrderData, cmd *durex.Instance) (durex.Result, error) {
-		slog.Info("✉️  Confirmation sent!", 
+		slog.Info("✉️  Confirmation sent!",
 			"orderId", data.OrderID,
 			"customer", data.CustomerID,
 			"tracking", cmd.GetString("trackingNum"),
@@ -170,7 +170,7 @@ func main() {
 				// Set the sequence for the workflow
 				spec := durex.Typed("validateOrder", order)
 				spec.Sequence = []string{"reserveInventory", "processPayment", "shipOrder", "sendConfirmation"}
-				
+
 				executor.Add(ctx, spec)
 				slog.Info("📥 New order received", "orderId", order.OrderID, "amount", order.Amount)
 			}

@@ -16,10 +16,10 @@ type ExpiredFunc func(ctx context.Context, cmd *Instance) (Result, error)
 // FuncCommand wraps a function as a Command.
 // Created via HandleFunc or NewFunc.
 type FuncCommand struct {
-	name       string
-	executeFn  ExecuteFunc
-	recoverFn  RecoverFunc
-	expiredFn  ExpiredFunc
+	name        string
+	executeFn   ExecuteFunc
+	recoverFn   RecoverFunc
+	expiredFn   ExpiredFunc
 	defaultSpec Spec
 }
 

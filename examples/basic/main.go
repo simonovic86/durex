@@ -54,7 +54,7 @@ func main() {
 	// Command that spawns children
 	executor.HandleFunc("notifyAll", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
 		users := []string{"alice@example.com", "bob@example.com", "carol@example.com"}
-		
+
 		specs := make([]durex.Spec, len(users))
 		for i, user := range users {
 			specs[i] = durex.Spec{
@@ -62,7 +62,7 @@ func main() {
 				Data: durex.M{"to": user, "subject": "Announcement!"},
 			}
 		}
-		
+
 		slog.Info("📢 Notifying all users", "count", len(users))
 		return durex.Spawn(specs...), nil
 	})

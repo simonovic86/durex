@@ -19,9 +19,9 @@ type TypedRecoverFunc[T any] func(ctx context.Context, data T, cmd *Instance, er
 
 // TypedCommand wraps a typed function as a Command.
 type TypedCommand[T any] struct {
-	name       string
-	executeFn  TypedExecuteFunc[T]
-	recoverFn  TypedRecoverFunc[T]
+	name        string
+	executeFn   TypedExecuteFunc[T]
+	recoverFn   TypedRecoverFunc[T]
 	defaultSpec Spec
 }
 
@@ -155,7 +155,7 @@ func Typed[T any](name string, data T) Spec {
 	jsonBytes, _ := json.Marshal(data)
 	var m M
 	json.Unmarshal(jsonBytes, &m)
-	
+
 	return Spec{
 		Name: name,
 		Data: m,
