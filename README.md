@@ -427,6 +427,10 @@ go run ./examples/basic
 go run ./examples/workflow
 ```
 
+## Documentation
+
+- **[Workflows & Chaining Guide](./docs/WORKFLOWS.md)** - Deep dive into command chaining, sequences, fan-out/fan-in, saga pattern, and best practices
+
 ## License
 
 MIT License - see [LICENSE](LICENSE)
