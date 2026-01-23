@@ -34,11 +34,13 @@ type Executor struct {
 	cleanupAge            time.Duration
 	shutdownTimeout       time.Duration
 	permanentCommands     []string
+	backoff               BackoffStrategy
 
 	// Extensibility
 	middleware   []Middleware
 	metrics      MetricsCollector
 	errorHandler func(cmd *Instance, err error)
+	rateLimiter  *RateLimiter
 
 	// Runtime state
 	queue    chan *Instance
@@ -67,6 +69,7 @@ func New(storage Storage, opts ...Option) *Executor {
 		cleanupInterval:       time.Hour,
 		cleanupAge:            24 * time.Hour,
 		shutdownTimeout:       30 * time.Second,
+		backoff:               NoBackoff(),
 		ctx:                   ctx,
 		cancel:                cancel,
 	}
@@ -172,6 +175,22 @@ func (e *Executor) Add(ctx context.Context, spec Spec) (*Instance, error) {
 		return nil, err
 	}
 
+	// Check for duplicate unique key
+	if instance.UniqueKey != "" {
+		existing, err := e.storage.FindByUniqueKey(ctx, instance.UniqueKey)
+		if err == nil && existing != nil {
+			e.logger.Debug("durex: duplicate command blocked",
+				"unique_key", instance.UniqueKey,
+				"existing_id", existing.ID,
+			)
+			return nil, ErrDuplicateCommand
+		}
+		// ErrNotFound is expected and means we can proceed
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, fmt.Errorf("durex: failed to check unique key: %w", err)
+		}
+	}
+
 	if err := e.storage.Create(ctx, instance); err != nil {
 		return nil, fmt.Errorf("durex: failed to persist command: %w", err)
 	}
@@ -239,14 +258,21 @@ func (e *Executor) Stats(ctx context.Context) (*Stats, error) {
 		return nil, err
 	}
 
-	return &Stats{
-		Pending:           pending,
-		Completed:         completed,
-		Failed:            failed,
-		QueueSize:         len(e.queue),
+	stats := &Stats{
+		Pending:            pending,
+		Completed:          completed,
+		Failed:             failed,
+		QueueSize:          len(e.queue),
 		RegisteredCommands: e.registry.Count(),
-		WorkerCount:       e.parallelism,
-	}, nil
+		WorkerCount:        e.parallelism,
+	}
+
+	if e.rateLimiter != nil {
+		rlStats := e.rateLimiter.Stats()
+		stats.RateLimit = &rlStats
+	}
+
+	return stats, nil
 }
 
 // Stats holds executor statistics.
@@ -257,6 +283,7 @@ type Stats struct {
 	QueueSize          int
 	RegisteredCommands int
 	WorkerCount        int
+	RateLimit          *RateLimitStats
 }
 
 // worker processes commands from the queue.
@@ -309,6 +336,17 @@ func (e *Executor) execute(instance *Instance) error {
 		instance.Status = StatusFailed
 		instance.Error = err.Error()
 		return e.storage.Update(ctx, instance)
+	}
+
+	// Apply rate limiting
+	if e.rateLimiter != nil {
+		release, err := e.rateLimiter.Acquire(ctx, instance.Name)
+		if err != nil {
+			// Context cancelled, reschedule
+			e.scheduleDelayed(instance)
+			return nil
+		}
+		defer release()
 	}
 
 	// Update status to started
@@ -415,6 +453,19 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, handler
 
 	// Spawn children
 	for _, spec := range result.Commands {
+		// Propagate trace and correlation IDs to children
+		if spec.TraceID == "" && instance.TraceID != "" {
+			spec.TraceID = instance.TraceID
+		}
+		if spec.CorrelationID == "" {
+			if instance.CorrelationID != "" {
+				spec.CorrelationID = instance.CorrelationID
+			} else {
+				// Use root command's ID as correlation ID
+				spec.CorrelationID = instance.ID
+			}
+		}
+
 		child, err := e.createInstance(spec)
 		if err != nil {
 			e.logger.Error("durex: failed to create child command",
@@ -460,9 +511,22 @@ func (e *Executor) handleError(ctx context.Context, instance *Instance, handler 
 		instance.Retries--
 		instance.Status = StatusPending
 		instance.Error = err.Error()
+
+		// Apply backoff delay
+		backoffDelay := e.backoff.NextDelay(instance.Attempt)
+		instance.ReadyAt = now.Add(backoffDelay)
+
 		if e.metrics != nil {
 			e.metrics.CommandRetried(instance.Name, instance.Attempt)
 		}
+
+		e.logger.Debug("durex: scheduling retry with backoff",
+			"id", instance.ID,
+			"name", instance.Name,
+			"attempt", instance.Attempt,
+			"backoff", backoffDelay,
+		)
+
 		if err := e.storage.Update(ctx, instance); err != nil {
 			return err
 		}
@@ -662,18 +726,21 @@ func (e *Executor) createInstance(spec Spec) (*Instance, error) {
 	readyAt := now.Add(spec.Delay)
 
 	instance := &Instance{
-		ID:        e.idGen.Generate(),
-		Name:      spec.Name,
-		Data:      spec.Data,
-		Status:    StatusPending,
-		Retries:   spec.Retries,
-		Sequence:  spec.Sequence,
-		Priority:  spec.Priority,
-		Tags:      spec.Tags,
-		CreatedAt: now,
-		ReadyAt:   readyAt,
-		Period:    spec.Period,
-		Attempt:   0,
+		ID:            e.idGen.Generate(),
+		Name:          spec.Name,
+		Data:          spec.Data,
+		Status:        StatusPending,
+		Retries:       spec.Retries,
+		Sequence:      spec.Sequence,
+		Priority:      spec.Priority,
+		Tags:          spec.Tags,
+		UniqueKey:     spec.UniqueKey,
+		TraceID:       spec.TraceID,
+		CorrelationID: spec.CorrelationID,
+		CreatedAt:     now,
+		ReadyAt:       readyAt,
+		Period:        spec.Period,
+		Attempt:       0,
 	}
 
 	// Apply default retries if not specified
@@ -730,6 +797,18 @@ func mergeSpecs(defaults, user Spec) Spec {
 	}
 	if len(user.Tags) > 0 {
 		result.Tags = user.Tags
+	}
+
+	if user.UniqueKey != "" {
+		result.UniqueKey = user.UniqueKey
+	}
+
+	if user.TraceID != "" {
+		result.TraceID = user.TraceID
+	}
+
+	if user.CorrelationID != "" {
+		result.CorrelationID = user.CorrelationID
 	}
 
 	return result

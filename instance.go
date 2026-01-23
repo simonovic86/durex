@@ -35,6 +35,18 @@ type Instance struct {
 	// Tags for categorization.
 	Tags []string `json:"tags,omitempty"`
 
+	// UniqueKey for deduplication.
+	// If set, only one active command with this key can exist at a time.
+	UniqueKey string `json:"unique_key,omitempty"`
+
+	// TraceID for distributed tracing.
+	// Propagated from parent commands.
+	TraceID string `json:"trace_id,omitempty"`
+
+	// CorrelationID links related commands together.
+	// Propagated from parent commands.
+	CorrelationID string `json:"correlation_id,omitempty"`
+
 	// CreatedAt is when the instance was created.
 	CreatedAt time.Time `json:"created_at"`
 
@@ -149,9 +161,11 @@ func (i *Instance) ContinueSequence(additionalData M) Result {
 
 	return Result{
 		Commands: []Spec{{
-			Name:     nextName,
-			Data:     data,
-			Sequence: remaining,
+			Name:          nextName,
+			Data:          data,
+			Sequence:      remaining,
+			TraceID:       i.TraceID,
+			CorrelationID: i.CorrelationID,
 		}},
 	}
 }

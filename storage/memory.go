@@ -147,6 +147,24 @@ func (m *Memory) FindByParent(ctx context.Context, parentID string) ([]*durex.In
 	return result, nil
 }
 
+// FindByUniqueKey implements durex.Storage.
+func (m *Memory) FindByUniqueKey(ctx context.Context, key string) (*durex.Instance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return nil, durex.ErrStorageClosed
+	}
+
+	for _, cmd := range m.commands {
+		if cmd.UniqueKey == key && cmd.Status.IsActive() {
+			return cmd.Clone(), nil
+		}
+	}
+
+	return nil, durex.ErrNotFound
+}
+
 // Cleanup implements durex.Storage.
 func (m *Memory) Cleanup(ctx context.Context, olderThan time.Duration) (int64, error) {
 	m.mu.Lock()

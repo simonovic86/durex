@@ -8,9 +8,10 @@ import (
 
 // Common storage errors.
 var (
-	ErrNotFound      = errors.New("durex: command not found")
-	ErrAlreadyExists = errors.New("durex: command already exists")
-	ErrStorageClosed = errors.New("durex: storage is closed")
+	ErrNotFound         = errors.New("durex: command not found")
+	ErrAlreadyExists    = errors.New("durex: command already exists")
+	ErrStorageClosed    = errors.New("durex: storage is closed")
+	ErrDuplicateCommand = errors.New("durex: command with this unique key already exists")
 )
 
 // Storage defines the interface for command persistence.
@@ -42,6 +43,11 @@ type Storage interface {
 
 	// FindByParent returns all child commands of the given parent.
 	FindByParent(ctx context.Context, parentID string) ([]*Instance, error)
+
+	// FindByUniqueKey returns an active command with the given unique key.
+	// Returns ErrNotFound if no active command with this key exists.
+	// Only searches non-terminal statuses (PENDING, STARTED, REPEATING).
+	FindByUniqueKey(ctx context.Context, key string) (*Instance, error)
 
 	// Cleanup removes completed/failed/expired commands older than the given age.
 	// Returns the number of commands deleted.

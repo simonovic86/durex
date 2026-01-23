@@ -56,6 +56,9 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 			parent_id TEXT REFERENCES %s(id) ON DELETE SET NULL,
 			priority INTEGER NOT NULL DEFAULT 0,
 			tags JSONB,
+			unique_key TEXT,
+			trace_id TEXT,
+			correlation_id TEXT,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			ready_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			started_at TIMESTAMPTZ,
@@ -71,7 +74,11 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_%s_ready_at ON %s(ready_at);
 		CREATE INDEX IF NOT EXISTS idx_%s_name ON %s(name);
 		CREATE INDEX IF NOT EXISTS idx_%s_parent_id ON %s(parent_id);
+		CREATE INDEX IF NOT EXISTS idx_%s_unique_key ON %s(unique_key) WHERE unique_key IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS idx_%s_correlation_id ON %s(correlation_id) WHERE correlation_id IS NOT NULL;
 	`, p.tableName, p.tableName,
+		p.tableName, p.tableName,
+		p.tableName, p.tableName,
 		p.tableName, p.tableName,
 		p.tableName, p.tableName,
 		p.tableName, p.tableName,
@@ -106,10 +113,10 @@ func (p *Postgres) Create(ctx context.Context, cmd *durex.Instance) error {
 	query := fmt.Sprintf(`
 		INSERT INTO %s (
 			id, name, data, status, retries, sequence, parent_id, priority,
-			tags, created_at, ready_at, started_at, completed_at, deadline_at,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
 			period_ns, error, attempt, metadata
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
 		)
 	`, p.tableName)
 
@@ -123,6 +130,9 @@ func (p *Postgres) Create(ctx context.Context, cmd *durex.Instance) error {
 		cmd.ParentID,
 		cmd.Priority,
 		tags,
+		nullStr(cmd.UniqueKey),
+		nullStr(cmd.TraceID),
+		nullStr(cmd.CorrelationID),
 		cmd.CreatedAt,
 		cmd.ReadyAt,
 		cmd.StartedAt,
@@ -177,14 +187,17 @@ func (p *Postgres) Update(ctx context.Context, cmd *durex.Instance) error {
 			parent_id = $7,
 			priority = $8,
 			tags = $9,
-			ready_at = $10,
-			started_at = $11,
-			completed_at = $12,
-			deadline_at = $13,
-			period_ns = $14,
-			error = $15,
-			attempt = $16,
-			metadata = $17
+			unique_key = $10,
+			trace_id = $11,
+			correlation_id = $12,
+			ready_at = $13,
+			started_at = $14,
+			completed_at = $15,
+			deadline_at = $16,
+			period_ns = $17,
+			error = $18,
+			attempt = $19,
+			metadata = $20
 		WHERE id = $1
 	`, p.tableName)
 
@@ -198,6 +211,9 @@ func (p *Postgres) Update(ctx context.Context, cmd *durex.Instance) error {
 		cmd.ParentID,
 		cmd.Priority,
 		tags,
+		nullStr(cmd.UniqueKey),
+		nullStr(cmd.TraceID),
+		nullStr(cmd.CorrelationID),
 		cmd.ReadyAt,
 		cmd.StartedAt,
 		cmd.CompletedAt,
@@ -235,7 +251,7 @@ func (p *Postgres) Delete(ctx context.Context, id string) error {
 func (p *Postgres) Get(ctx context.Context, id string) (*durex.Instance, error) {
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
-			tags, created_at, ready_at, started_at, completed_at, deadline_at,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
 			period_ns, error, attempt, metadata
 		FROM %s WHERE id = $1
 	`, p.tableName)
@@ -248,7 +264,7 @@ func (p *Postgres) Get(ctx context.Context, id string) (*durex.Instance, error) 
 func (p *Postgres) FindPending(ctx context.Context) ([]*durex.Instance, error) {
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
-			tags, created_at, ready_at, started_at, completed_at, deadline_at,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
 			period_ns, error, attempt, metadata
 		FROM %s
 		WHERE status IN ('PENDING', 'STARTED', 'REPEATING')
@@ -262,7 +278,7 @@ func (p *Postgres) FindPending(ctx context.Context) ([]*durex.Instance, error) {
 func (p *Postgres) FindByStatus(ctx context.Context, status durex.Status) ([]*durex.Instance, error) {
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
-			tags, created_at, ready_at, started_at, completed_at, deadline_at,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
 			period_ns, error, attempt, metadata
 		FROM %s
 		WHERE status = $1
@@ -276,7 +292,7 @@ func (p *Postgres) FindByStatus(ctx context.Context, status durex.Status) ([]*du
 func (p *Postgres) FindByParent(ctx context.Context, parentID string) ([]*durex.Instance, error) {
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
-			tags, created_at, ready_at, started_at, completed_at, deadline_at,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
 			period_ns, error, attempt, metadata
 		FROM %s
 		WHERE parent_id = $1
@@ -284,6 +300,35 @@ func (p *Postgres) FindByParent(ctx context.Context, parentID string) ([]*durex.
 	`, p.tableName)
 
 	return p.queryInstances(ctx, query, parentID)
+}
+
+// FindByUniqueKey implements durex.Storage.
+func (p *Postgres) FindByUniqueKey(ctx context.Context, key string) (*durex.Instance, error) {
+	query := fmt.Sprintf(`
+		SELECT id, name, data, status, retries, sequence, parent_id, priority,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
+			period_ns, error, attempt, metadata
+		FROM %s
+		WHERE unique_key = $1 AND status IN ('PENDING', 'STARTED', 'REPEATING')
+		LIMIT 1
+	`, p.tableName)
+
+	row := p.db.QueryRowContext(ctx, query, key)
+	return p.scanInstance(row)
+}
+
+// FindByCorrelationID returns all commands with the given correlation ID.
+func (p *Postgres) FindByCorrelationID(ctx context.Context, correlationID string) ([]*durex.Instance, error) {
+	query := fmt.Sprintf(`
+		SELECT id, name, data, status, retries, sequence, parent_id, priority,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
+			period_ns, error, attempt, metadata
+		FROM %s
+		WHERE correlation_id = $1
+		ORDER BY created_at ASC
+	`, p.tableName)
+
+	return p.queryInstances(ctx, query, correlationID)
 }
 
 // Cleanup implements durex.Storage.
@@ -388,7 +433,7 @@ func (p *Postgres) Find(ctx context.Context, query durex.Query) ([]*durex.Instan
 
 	sqlQuery := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
-			tags, created_at, ready_at, started_at, completed_at, deadline_at,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
 			period_ns, error, attempt, metadata
 		FROM %s
 		%s
@@ -433,17 +478,20 @@ func (p *Postgres) queryInstances(ctx context.Context, query string, args ...any
 
 func (p *Postgres) scanInstance(row *sql.Row) (*durex.Instance, error) {
 	var (
-		cmd         durex.Instance
-		data        []byte
-		sequence    []byte
-		tags        []byte
-		metadata    []byte
-		periodNs    int64
-		parentID    sql.NullString
-		startedAt   sql.NullTime
-		completedAt sql.NullTime
-		deadlineAt  sql.NullTime
-		errMsg      sql.NullString
+		cmd           durex.Instance
+		data          []byte
+		sequence      []byte
+		tags          []byte
+		metadata      []byte
+		periodNs      int64
+		parentID      sql.NullString
+		uniqueKey     sql.NullString
+		traceID       sql.NullString
+		correlationID sql.NullString
+		startedAt     sql.NullTime
+		completedAt   sql.NullTime
+		deadlineAt    sql.NullTime
+		errMsg        sql.NullString
 	)
 
 	err := row.Scan(
@@ -456,6 +504,9 @@ func (p *Postgres) scanInstance(row *sql.Row) (*durex.Instance, error) {
 		&parentID,
 		&cmd.Priority,
 		&tags,
+		&uniqueKey,
+		&traceID,
+		&correlationID,
 		&cmd.CreatedAt,
 		&cmd.ReadyAt,
 		&startedAt,
@@ -493,6 +544,15 @@ func (p *Postgres) scanInstance(row *sql.Row) (*durex.Instance, error) {
 	if parentID.Valid {
 		cmd.ParentID = &parentID.String
 	}
+	if uniqueKey.Valid {
+		cmd.UniqueKey = uniqueKey.String
+	}
+	if traceID.Valid {
+		cmd.TraceID = traceID.String
+	}
+	if correlationID.Valid {
+		cmd.CorrelationID = correlationID.String
+	}
 	if startedAt.Valid {
 		cmd.StartedAt = &startedAt.Time
 	}
@@ -513,17 +573,20 @@ func (p *Postgres) scanInstance(row *sql.Row) (*durex.Instance, error) {
 
 func (p *Postgres) scanInstanceFromRows(rows *sql.Rows) (*durex.Instance, error) {
 	var (
-		cmd         durex.Instance
-		data        []byte
-		sequence    []byte
-		tags        []byte
-		metadata    []byte
-		periodNs    int64
-		parentID    sql.NullString
-		startedAt   sql.NullTime
-		completedAt sql.NullTime
-		deadlineAt  sql.NullTime
-		errMsg      sql.NullString
+		cmd           durex.Instance
+		data          []byte
+		sequence      []byte
+		tags          []byte
+		metadata      []byte
+		periodNs      int64
+		parentID      sql.NullString
+		uniqueKey     sql.NullString
+		traceID       sql.NullString
+		correlationID sql.NullString
+		startedAt     sql.NullTime
+		completedAt   sql.NullTime
+		deadlineAt    sql.NullTime
+		errMsg        sql.NullString
 	)
 
 	err := rows.Scan(
@@ -536,6 +599,9 @@ func (p *Postgres) scanInstanceFromRows(rows *sql.Rows) (*durex.Instance, error)
 		&parentID,
 		&cmd.Priority,
 		&tags,
+		&uniqueKey,
+		&traceID,
+		&correlationID,
 		&cmd.CreatedAt,
 		&cmd.ReadyAt,
 		&startedAt,
@@ -577,6 +643,15 @@ func (p *Postgres) scanInstanceFromRows(rows *sql.Rows) (*durex.Instance, error)
 
 	if parentID.Valid {
 		cmd.ParentID = &parentID.String
+	}
+	if uniqueKey.Valid {
+		cmd.UniqueKey = uniqueKey.String
+	}
+	if traceID.Valid {
+		cmd.TraceID = traceID.String
+	}
+	if correlationID.Valid {
+		cmd.CorrelationID = correlationID.String
 	}
 	if startedAt.Valid {
 		cmd.StartedAt = &startedAt.Time
@@ -622,16 +697,18 @@ func (t *postgresTx) Create(ctx context.Context, cmd *durex.Instance) error {
 	query := fmt.Sprintf(`
 		INSERT INTO %s (
 			id, name, data, status, retries, sequence, parent_id, priority,
-			tags, created_at, ready_at, started_at, completed_at, deadline_at,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
 			period_ns, error, attempt, metadata
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
 		)
 	`, t.tableName)
 
 	_, err := t.tx.ExecContext(ctx, query,
 		cmd.ID, cmd.Name, data, cmd.Status, cmd.Retries, sequence,
-		cmd.ParentID, cmd.Priority, tags, cmd.CreatedAt, cmd.ReadyAt,
+		cmd.ParentID, cmd.Priority, tags, nullStr(cmd.UniqueKey),
+		nullStr(cmd.TraceID), nullStr(cmd.CorrelationID),
+		cmd.CreatedAt, cmd.ReadyAt,
 		cmd.StartedAt, cmd.CompletedAt, cmd.DeadlineAt,
 		int64(cmd.Period), cmd.Error, cmd.Attempt, metadata,
 	)
@@ -648,15 +725,17 @@ func (t *postgresTx) Update(ctx context.Context, cmd *durex.Instance) error {
 	query := fmt.Sprintf(`
 		UPDATE %s SET
 			name = $2, data = $3, status = $4, retries = $5, sequence = $6,
-			parent_id = $7, priority = $8, tags = $9, ready_at = $10,
-			started_at = $11, completed_at = $12, deadline_at = $13,
-			period_ns = $14, error = $15, attempt = $16, metadata = $17
+			parent_id = $7, priority = $8, tags = $9, unique_key = $10,
+			trace_id = $11, correlation_id = $12, ready_at = $13,
+			started_at = $14, completed_at = $15, deadline_at = $16,
+			period_ns = $17, error = $18, attempt = $19, metadata = $20
 		WHERE id = $1
 	`, t.tableName)
 
 	_, err := t.tx.ExecContext(ctx, query,
 		cmd.ID, cmd.Name, data, cmd.Status, cmd.Retries, sequence,
-		cmd.ParentID, cmd.Priority, tags, cmd.ReadyAt,
+		cmd.ParentID, cmd.Priority, tags, nullStr(cmd.UniqueKey),
+		nullStr(cmd.TraceID), nullStr(cmd.CorrelationID), cmd.ReadyAt,
 		cmd.StartedAt, cmd.CompletedAt, cmd.DeadlineAt,
 		int64(cmd.Period), cmd.Error, cmd.Attempt, metadata,
 	)
@@ -691,6 +770,11 @@ func (t *postgresTx) FindByParent(ctx context.Context, parentID string) ([]*dure
 	return nil, errors.New("FindByParent not supported in transaction context")
 }
 
+// FindByUniqueKey implements durex.Storage.
+func (t *postgresTx) FindByUniqueKey(ctx context.Context, key string) (*durex.Instance, error) {
+	return nil, errors.New("FindByUniqueKey not supported in transaction context")
+}
+
 // Cleanup implements durex.Storage.
 func (t *postgresTx) Cleanup(ctx context.Context, olderThan time.Duration) (int64, error) {
 	return 0, errors.New("Cleanup not supported in transaction context")
@@ -704,6 +788,14 @@ func (t *postgresTx) Count(ctx context.Context, status *durex.Status) (int64, er
 // Close implements durex.Storage.
 func (t *postgresTx) Close() error {
 	return nil
+}
+
+// nullStr returns nil for empty strings, otherwise the string.
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // Ensure Postgres implements the interfaces.

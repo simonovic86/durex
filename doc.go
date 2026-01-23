@@ -8,12 +8,15 @@ patterns from job queues, workflow engines, and saga orchestrators.
 # Key Features
 
   - Persistent Commands: Commands survive process restarts
-  - Automatic Retries: Configurable retry logic with backoff
+  - Automatic Retries: Configurable retry logic with backoff strategies
   - Deadlines: Time-bound execution with expiration handling
   - Command Chaining: Build workflows with sequences
   - Recovery: Custom error handling and compensation
   - Middleware: Extensible execution pipeline
   - Multiple Storage Backends: PostgreSQL, SQLite, Memory
+  - Rate Limiting: Control concurrent execution per command type
+  - Deduplication: Prevent duplicate commands with unique keys
+  - Context Propagation: Trace and correlation IDs across command chains
 
 # Basic Usage
 
@@ -150,6 +153,60 @@ Durex supports multiple storage backends:
 	db, _ := sql.Open("postgres", "postgres://...")
 	storage := storage.NewPostgres(db)
 	storage.Migrate(ctx)
+
+# Backoff Strategies
+
+Configure retry backoff behavior:
+
+	executor := durex.New(storage,
+		durex.WithBackoff(durex.DefaultExponentialBackoff()),
+	)
+
+Available strategies:
+
+  - durex.NoBackoff(): Immediate retry (default)
+  - durex.ConstantBackoff{Delay: 5 * time.Second}: Fixed delay
+  - durex.LinearBackoff{InitialDelay: time.Second, MaxDelay: time.Minute}
+  - durex.ExponentialBackoff{InitialDelay: time.Second, MaxDelay: 5 * time.Minute, Multiplier: 2.0}
+  - durex.JitteredBackoff{Strategy: ..., JitterRate: 0.1}: Add randomness to prevent thundering herd
+
+# Deduplication
+
+Prevent duplicate commands with unique keys:
+
+	executor.Add(ctx, durex.Spec{
+		Name:      "sendEmail",
+		UniqueKey: "email:user123:welcome",  // Only one active command with this key
+	})
+
+If a non-terminal command with the same UniqueKey exists, Add() returns ErrDuplicateCommand.
+
+# Rate Limiting
+
+Control concurrent command execution:
+
+	executor := durex.New(storage,
+		durex.WithRateLimit("sendEmail", 10),     // Max 10 concurrent emails
+		durex.WithRateLimit("apiCall", 5),        // Max 5 concurrent API calls
+		durex.WithGlobalRateLimit(100),           // Max 100 total concurrent commands
+	)
+
+# Tracing and Correlation
+
+Commands automatically propagate trace and correlation IDs to child commands:
+
+	executor.Add(ctx, durex.Spec{
+		Name:          "workflow",
+		TraceID:       "trace-123",      // Propagated to all children
+		CorrelationID: "correlation-456", // Links related commands
+	})
+
+Access these in your command:
+
+	func (c *MyCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+		log.Printf("TraceID: %s, CorrelationID: %s", cmd.TraceID, cmd.CorrelationID)
+		// ...
+	}
 
 # Production Considerations
 

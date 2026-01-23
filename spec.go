@@ -50,6 +50,21 @@ type Spec struct {
 
 	// Tags are optional labels for categorization and filtering.
 	Tags []string `json:"tags,omitempty"`
+
+	// UniqueKey prevents duplicate commands with the same key.
+	// If a non-terminal command with this key already exists, Add() returns
+	// ErrDuplicateCommand instead of creating a new instance.
+	// Useful for ensuring idempotency (e.g., "send-email:user123").
+	UniqueKey string `json:"unique_key,omitempty"`
+
+	// TraceID is used for distributed tracing.
+	// Automatically propagated to child commands.
+	TraceID string `json:"trace_id,omitempty"`
+
+	// CorrelationID links related commands together.
+	// Automatically propagated to child commands.
+	// If not set, defaults to the root command's ID.
+	CorrelationID string `json:"correlation_id,omitempty"`
 }
 
 // WithData returns a copy of the Spec with the given data merged in.
@@ -90,5 +105,26 @@ func (s Spec) WithPriority(p int) Spec {
 // WithTags returns a copy of the Spec with the given tags.
 func (s Spec) WithTags(tags ...string) Spec {
 	s.Tags = append(s.Tags, tags...)
+	return s
+}
+
+// WithUniqueKey returns a copy of the Spec with the given unique key.
+// Commands with the same unique key cannot be added while one is still active.
+func (s Spec) WithUniqueKey(key string) Spec {
+	s.UniqueKey = key
+	return s
+}
+
+// WithTraceID returns a copy of the Spec with the given trace ID.
+// The trace ID is propagated to all child commands.
+func (s Spec) WithTraceID(traceID string) Spec {
+	s.TraceID = traceID
+	return s
+}
+
+// WithCorrelationID returns a copy of the Spec with the given correlation ID.
+// The correlation ID is propagated to all child commands.
+func (s Spec) WithCorrelationID(correlationID string) Spec {
+	s.CorrelationID = correlationID
 	return s
 }

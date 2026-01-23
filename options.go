@@ -129,6 +129,60 @@ func WithErrorHandler(handler func(cmd *Instance, err error)) Option {
 	}
 }
 
+// WithBackoff sets the backoff strategy for retries.
+// Default is NoBackoff() (immediate retry).
+// Use DefaultExponentialBackoff() for production workloads.
+func WithBackoff(strategy BackoffStrategy) Option {
+	return func(e *Executor) {
+		if strategy != nil {
+			e.backoff = strategy
+		}
+	}
+}
+
+// WithRateLimiter sets a custom rate limiter for the executor.
+// Use this when you need fine-grained control over rate limiting.
+func WithRateLimiter(limiter *RateLimiter) Option {
+	return func(e *Executor) {
+		e.rateLimiter = limiter
+	}
+}
+
+// WithRateLimit sets the maximum concurrent executions for a specific command type.
+// This creates or updates the executor's rate limiter.
+//
+// Example:
+//
+//	executor := durex.New(storage,
+//		durex.WithRateLimit("sendEmail", 10),    // max 10 concurrent emails
+//		durex.WithRateLimit("processOrder", 5),  // max 5 concurrent orders
+//	)
+func WithRateLimit(commandName string, maxConcurrent int) Option {
+	return func(e *Executor) {
+		if e.rateLimiter == nil {
+			e.rateLimiter = NewRateLimiter()
+		}
+		e.rateLimiter.SetLimit(commandName, maxConcurrent)
+	}
+}
+
+// WithGlobalRateLimit sets the maximum total concurrent executions across all commands.
+// This is useful for limiting overall system load.
+//
+// Example:
+//
+//	executor := durex.New(storage,
+//		durex.WithGlobalRateLimit(100),  // max 100 total concurrent commands
+//	)
+func WithGlobalRateLimit(maxConcurrent int) Option {
+	return func(e *Executor) {
+		if e.rateLimiter == nil {
+			e.rateLimiter = NewRateLimiter()
+		}
+		e.rateLimiter.SetGlobalLimit(maxConcurrent)
+	}
+}
+
 // MetricsCollector receives execution metrics.
 type MetricsCollector interface {
 	// CommandStarted is called when a command begins execution.

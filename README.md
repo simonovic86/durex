@@ -11,12 +11,15 @@ Durex enables you to build reliable, persistent command/task execution systems w
 ## Features
 
 - 🔄 **Persistent Commands** - Commands survive process restarts
-- 🔁 **Automatic Retries** - Configurable retry logic
+- 🔁 **Automatic Retries** - Configurable retry logic with backoff strategies
 - ⏰ **Deadlines** - Time-bound execution with expiration handlers
 - 🔗 **Workflows** - Chain commands together with sequences
 - 🛡️ **Recovery** - Custom error handling and compensation (saga pattern)
 - 🎯 **Type Safety** - Generic typed commands with `HandleTyped[T]`
 - 💾 **Multiple Backends** - PostgreSQL, SQLite, In-Memory
+- 🚦 **Rate Limiting** - Control concurrent execution per command type
+- 🔑 **Deduplication** - Prevent duplicate commands with unique keys
+- 🔍 **Tracing** - Trace and correlation IDs across command chains
 
 ## Architecture
 
@@ -291,11 +294,114 @@ store.Migrate(ctx)
 ```go
 executor := durex.New(store,
     durex.WithParallelism(8),              // Worker count
-    durex.WithDefaultRetries(3),            // Default retries
-    durex.WithCleanupInterval(time.Hour),   // Auto-cleanup
+    durex.WithDefaultRetries(3),           // Default retries
+    durex.WithCleanupInterval(time.Hour),  // Auto-cleanup
     durex.WithGracefulShutdown(30*time.Second),
     durex.WithMiddleware(loggingMiddleware),
+    durex.WithBackoff(durex.DefaultExponentialBackoff()), // Retry backoff
+    durex.WithRateLimit("sendEmail", 10),  // Max 10 concurrent emails
+    durex.WithGlobalRateLimit(100),        // Max 100 total concurrent
 )
+```
+
+## Backoff Strategies
+
+Control retry timing with configurable backoff:
+
+```go
+// Exponential backoff with jitter (recommended for production)
+executor := durex.New(store,
+    durex.WithBackoff(durex.DefaultExponentialBackoff()),
+)
+
+// Custom exponential: 1s → 2s → 4s → 8s... (max 5 min)
+executor := durex.New(store,
+    durex.WithBackoff(durex.ExponentialBackoff{
+        InitialDelay: time.Second,
+        MaxDelay:     5 * time.Minute,
+        Multiplier:   2.0,
+    }),
+)
+
+// Add jitter to prevent thundering herd
+executor := durex.New(store,
+    durex.WithBackoff(durex.JitteredBackoff{
+        Strategy:   durex.ExponentialBackoff{InitialDelay: time.Second},
+        JitterRate: 0.1, // ±10% randomness
+    }),
+)
+```
+
+Available strategies:
+- `NoBackoff()` - Immediate retry (default)
+- `ConstantBackoff{Delay: 5*time.Second}` - Fixed delay
+- `LinearBackoff{InitialDelay: time.Second, MaxDelay: time.Minute}` - Linear increase
+- `ExponentialBackoff{...}` - Exponential increase
+- `JitteredBackoff{...}` - Wrap any strategy with randomness
+
+## Rate Limiting
+
+Control concurrent command execution to prevent overwhelming external services:
+
+```go
+executor := durex.New(store,
+    durex.WithRateLimit("sendEmail", 10),    // Max 10 concurrent emails
+    durex.WithRateLimit("apiCall", 5),       // Max 5 concurrent API calls
+    durex.WithGlobalRateLimit(100),          // Max 100 total concurrent
+)
+```
+
+Commands will wait for a slot to become available before executing.
+
+## Deduplication (Unique Keys)
+
+Prevent duplicate commands from running simultaneously:
+
+```go
+// Only one active "welcome email to user123" can exist
+executor.Add(ctx, durex.Spec{
+    Name:      "sendEmail",
+    UniqueKey: "welcome-email:user123",
+    Data:      durex.M{"to": "user@example.com"},
+})
+
+// Attempting to add another with same key returns ErrDuplicateCommand
+_, err := executor.Add(ctx, durex.Spec{
+    Name:      "sendEmail",
+    UniqueKey: "welcome-email:user123",
+})
+// err == durex.ErrDuplicateCommand
+```
+
+Use unique keys for:
+- Preventing duplicate notifications
+- Ensuring idempotent operations
+- Rate limiting per-entity (e.g., one sync per user)
+
+## Tracing & Correlation
+
+Track related commands across workflows:
+
+```go
+// Set trace/correlation IDs on the root command
+executor.Add(ctx, durex.Spec{
+    Name:          "processOrder",
+    TraceID:       "trace-abc123",      // From your tracing system
+    CorrelationID: "order-456",         // Links all related commands
+    Sequence:      []string{"chargePayment", "shipOrder", "sendConfirmation"},
+})
+
+// Access in your command handler
+executor.HandleFunc("chargePayment", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    log.Printf("[%s] Processing payment for correlation: %s", 
+        cmd.TraceID, cmd.CorrelationID)
+    
+    // IDs automatically propagate to child commands
+    return cmd.ContinueSequence(nil), nil
+})
+
+// Query all commands in a workflow
+commands, _ := store.FindByCorrelationID(ctx, "order-456")
 ```
 
 ## Middleware
