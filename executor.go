@@ -35,6 +35,8 @@ type Executor struct {
 	shutdownTimeout       time.Duration
 	permanentCommands     []string
 	backoff               BackoffStrategy
+	pollInterval          time.Duration
+	claimBatchSize        int
 
 	// Extensibility
 	middleware   []Middleware
@@ -70,6 +72,8 @@ func New(storage Storage, opts ...Option) *Executor {
 		cleanupAge:            24 * time.Hour,
 		shutdownTimeout:       30 * time.Second,
 		backoff:               NoBackoff(),
+		pollInterval:          time.Second,
+		claimBatchSize:        10,
 		ctx:                   ctx,
 		cancel:                cancel,
 	}
@@ -96,15 +100,34 @@ func (e *Executor) Start(ctx context.Context) error {
 		return nil
 	}
 
+	// Check if storage supports locking (safe for multi-instance)
+	_, useLocking := e.storage.(LockingStorage)
+
 	e.logger.Info("durex: starting executor",
 		"parallelism", e.parallelism,
 		"registered_commands", e.registry.Count(),
+		"locking_mode", useLocking,
 	)
 
-	// Start workers
-	for i := 0; i < e.parallelism; i++ {
-		e.wg.Add(1)
-		go e.worker(i)
+	if useLocking {
+		// Use polling workers that claim directly from storage
+		// This is safe for multi-instance deployments
+		for i := 0; i < e.parallelism; i++ {
+			e.wg.Add(1)
+			go e.pollingWorker(i)
+		}
+	} else {
+		// Use queue-based workers (single instance only)
+		for i := 0; i < e.parallelism; i++ {
+			e.wg.Add(1)
+			go e.worker(i)
+		}
+
+		// Replay pending commands into the queue
+		if err := e.replay(ctx); err != nil {
+			e.logger.Error("durex: failed to replay pending commands", "error", err)
+			return err
+		}
 	}
 
 	// Start permanent commands
@@ -123,12 +146,6 @@ func (e *Executor) Start(ctx context.Context) error {
 	}
 
 	e.started.Store(true)
-
-	// Replay pending commands
-	if err := e.replay(ctx); err != nil {
-		e.logger.Error("durex: failed to replay pending commands", "error", err)
-		return err
-	}
 
 	return nil
 }
@@ -286,7 +303,7 @@ type Stats struct {
 	RateLimit          *RateLimitStats
 }
 
-// worker processes commands from the queue.
+// worker processes commands from the queue (single-instance mode).
 func (e *Executor) worker(id int) {
 	defer e.wg.Done()
 
@@ -307,6 +324,119 @@ func (e *Executor) worker(id int) {
 			}
 		}
 	}
+}
+
+// pollingWorker claims commands directly from storage (multi-instance safe).
+// Uses row-level locking to prevent multiple executors from claiming the same command.
+func (e *Executor) pollingWorker(id int) {
+	defer e.wg.Done()
+
+	lockingStorage := e.storage.(LockingStorage)
+	ticker := time.NewTicker(e.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-ticker.C:
+			e.claimAndExecute(lockingStorage)
+		}
+	}
+}
+
+// claimAndExecute claims pending commands and executes them.
+func (e *Executor) claimAndExecute(storage LockingStorage) {
+	if e.stopping.Load() {
+		return
+	}
+
+	// Claim a batch of commands
+	commands, err := storage.ClaimPending(e.ctx, e.claimBatchSize)
+	if err != nil {
+		e.logger.Error("durex: failed to claim commands", "error", err)
+		return
+	}
+
+	// Execute each claimed command
+	for _, instance := range commands {
+		if e.stopping.Load() {
+			return
+		}
+
+		if err := e.executeClaimedCommand(instance); err != nil {
+			e.logger.Error("durex: command execution failed",
+				"id", instance.ID,
+				"name", instance.Name,
+				"error", err,
+			)
+		}
+	}
+}
+
+// executeClaimedCommand executes a command that was already claimed (status=STARTED).
+func (e *Executor) executeClaimedCommand(instance *Instance) error {
+	ctx := e.ctx
+	now := time.Now()
+
+	// Check if cancelled
+	if e.stopping.Load() {
+		return nil
+	}
+
+	// Check deadline
+	if instance.DeadlineAt != nil && now.After(*instance.DeadlineAt) {
+		return e.handleExpired(ctx, instance)
+	}
+
+	// Resolve handler
+	handler, err := e.registry.Resolve(instance.Name)
+	if err != nil {
+		instance.Status = StatusFailed
+		instance.Error = err.Error()
+		return e.storage.Update(ctx, instance)
+	}
+
+	// Apply rate limiting
+	if e.rateLimiter != nil {
+		release, err := e.rateLimiter.Acquire(ctx, instance.Name)
+		if err != nil {
+			// Context cancelled, reschedule
+			instance.Status = StatusPending
+			return e.storage.Update(ctx, instance)
+		}
+		defer release()
+	}
+
+	// Collect metrics
+	if e.metrics != nil {
+		e.metrics.CommandStarted(instance.Name)
+	}
+
+	e.logger.Debug("durex: executing command",
+		"id", instance.ID,
+		"name", instance.Name,
+		"attempt", instance.Attempt,
+	)
+
+	// Execute with middleware
+	result, err := e.executeWithMiddleware(ctx, instance, handler)
+
+	// Record duration
+	duration := time.Since(now)
+
+	if err != nil {
+		if e.metrics != nil {
+			e.metrics.CommandFailed(instance.Name, err)
+		}
+		return e.handleError(ctx, instance, handler, err)
+	}
+
+	if e.metrics != nil {
+		e.metrics.CommandCompleted(instance.Name, duration)
+	}
+
+	return e.handleResult(ctx, instance, handler, result)
 }
 
 // execute runs a single command instance.

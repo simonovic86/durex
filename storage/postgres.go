@@ -274,6 +274,101 @@ func (p *Postgres) FindPending(ctx context.Context) ([]*durex.Instance, error) {
 	return p.queryInstances(ctx, query)
 }
 
+// ClaimPending implements durex.LockingStorage.
+// Atomically finds and claims pending commands using FOR UPDATE SKIP LOCKED.
+// This prevents multiple executor instances from claiming the same command.
+func (p *Postgres) ClaimPending(ctx context.Context, limit int) ([]*durex.Instance, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Select and lock rows atomically
+	// FOR UPDATE SKIP LOCKED ensures we don't block on locked rows
+	selectQuery := fmt.Sprintf(`
+		SELECT id, name, data, status, retries, sequence, parent_id, priority,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
+			period_ns, error, attempt, metadata
+		FROM %s
+		WHERE status IN ('PENDING', 'REPEATING')
+		  AND ready_at <= NOW()
+		ORDER BY priority DESC, ready_at ASC
+		LIMIT $1
+		FOR UPDATE SKIP LOCKED
+	`, p.tableName)
+
+	rows, err := tx.QueryContext(ctx, selectQuery, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending commands: %w", err)
+	}
+
+	var instances []*durex.Instance
+	var ids []string
+
+	for rows.Next() {
+		instance, err := p.scanInstanceFromTxRows(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		instances = append(instances, instance)
+		ids = append(ids, instance.ID)
+	}
+	rows.Close()
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	// Update status to STARTED for all claimed commands
+	// Build the IN clause with placeholders
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+
+	updateQuery := fmt.Sprintf(`
+		UPDATE %s
+		SET status = 'STARTED', started_at = NOW(), attempt = attempt + 1
+		WHERE id IN (%s)
+	`, p.tableName, strings.Join(placeholders, ", "))
+
+	_, err = tx.ExecContext(ctx, updateQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update command status: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	// Update the returned instances to reflect the changes
+	now := time.Now()
+	for _, inst := range instances {
+		inst.Status = durex.StatusStarted
+		inst.StartedAt = &now
+		inst.Attempt++
+	}
+
+	return instances, nil
+}
+
+// scanInstanceFromTxRows scans a single instance from transaction rows.
+func (p *Postgres) scanInstanceFromTxRows(rows *sql.Rows) (*durex.Instance, error) {
+	return p.scanInstanceFromRows(rows)
+}
+
 // FindByStatus implements durex.Storage.
 func (p *Postgres) FindByStatus(ctx context.Context, status durex.Status) ([]*durex.Instance, error) {
 	query := fmt.Sprintf(`
@@ -803,4 +898,5 @@ var (
 	_ durex.Storage              = (*Postgres)(nil)
 	_ durex.QueryableStorage     = (*Postgres)(nil)
 	_ durex.TransactionalStorage = (*Postgres)(nil)
+	_ durex.LockingStorage       = (*Postgres)(nil)
 )

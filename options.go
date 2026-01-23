@@ -183,6 +183,26 @@ func WithGlobalRateLimit(maxConcurrent int) Option {
 	}
 }
 
+// WithPollInterval sets how often workers poll for new commands when using
+// LockingStorage (multi-instance mode). Default is 1 second.
+func WithPollInterval(d time.Duration) Option {
+	return func(e *Executor) {
+		if d > 0 {
+			e.pollInterval = d
+		}
+	}
+}
+
+// WithClaimBatchSize sets how many commands each worker claims per poll cycle
+// when using LockingStorage. Default is 10.
+func WithClaimBatchSize(size int) Option {
+	return func(e *Executor) {
+		if size > 0 {
+			e.claimBatchSize = size
+		}
+	}
+}
+
 // MetricsCollector receives execution metrics.
 type MetricsCollector interface {
 	// CommandStarted is called when a command begins execution.

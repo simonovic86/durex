@@ -20,6 +20,8 @@ Durex enables you to build reliable, persistent command/task execution systems w
 - 🚦 **Rate Limiting** - Control concurrent execution per command type
 - 🔑 **Deduplication** - Prevent duplicate commands with unique keys
 - 🔍 **Tracing** - Trace and correlation IDs across command chains
+- 🔒 **Multi-Instance Safe** - Row-level locking for horizontal scaling
+- 📊 **Web Dashboard** - Built-in real-time monitoring UI
 
 ## Architecture
 
@@ -414,6 +416,43 @@ func loggingMiddleware(ctx durex.MiddlewareContext, next func() (durex.Result, e
     return result, err
 }
 ```
+
+## Web Dashboard
+
+Durex includes a built-in real-time monitoring dashboard with zero external dependencies:
+
+```go
+// Simple: start dashboard on a port
+go executor.ServeDashboard(":8080")
+
+// Or integrate with existing server
+http.Handle("/durex/", http.StripPrefix("/durex", executor.DashboardHandler()))
+```
+
+The dashboard shows:
+- Live command counts (pending, completed, failed)
+- Rate limit utilization
+- Recent commands table with status, attempts, timing
+- Auto-refreshes every 2 seconds
+
+## Multi-Instance Deployment
+
+For horizontal scaling, use PostgreSQL with row-level locking. Durex automatically detects `LockingStorage` and uses `FOR UPDATE SKIP LOCKED` to prevent multiple instances from claiming the same command:
+
+```go
+// PostgreSQL storage automatically enables locking mode
+db, _ := sql.Open("postgres", "postgres://...")
+store := storage.NewPostgres(db)
+store.Migrate(ctx)
+
+executor := durex.New(store,
+    durex.WithParallelism(8),
+    durex.WithPollInterval(500*time.Millisecond),  // How often to poll for work
+    durex.WithClaimBatchSize(20),                   // Commands claimed per poll
+)
+```
+
+This enables safe deployment of multiple executor instances behind a load balancer.
 
 ## Examples
 

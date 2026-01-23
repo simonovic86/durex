@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Durex Dashboard</title>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-card: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent-blue: #3b82f6;
+            --accent-green: #22c55e;
+            --accent-yellow: #eab308;
+            --accent-red: #ef4444;
+            --accent-purple: #a855f7;
+            --border: #475569;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        .logo h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-secondary);
+            border-radius: 9999px;
+            font-size: 0.875rem;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+        }
+        
+        .stat-card.pending { border-left: 4px solid var(--accent-yellow); }
+        .stat-card.running { border-left: 4px solid var(--accent-blue); }
+        .stat-card.completed { border-left: 4px solid var(--accent-green); }
+        .stat-card.failed { border-left: 4px solid var(--accent-red); }
+        .stat-card.workers { border-left: 4px solid var(--accent-purple); }
+        
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+        
+        .stat-card.pending .stat-value { color: var(--accent-yellow); }
+        .stat-card.running .stat-value { color: var(--accent-blue); }
+        .stat-card.completed .stat-value { color: var(--accent-green); }
+        .stat-card.failed .stat-value { color: var(--accent-red); }
+        .stat-card.workers .stat-value { color: var(--accent-purple); }
+        
+        .section {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            margin-bottom: 2rem;
+            overflow: hidden;
+        }
+        
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .section-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+        
+        .section-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            border: none;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-secondary {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+        
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 1rem 1.5rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        th {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        td {
+            font-size: 0.875rem;
+        }
+        
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        tr:hover {
+            background: var(--bg-card);
+        }
+        
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-pill.pending { background: rgba(234, 179, 8, 0.2); color: var(--accent-yellow); }
+        .status-pill.started { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); }
+        .status-pill.completed { background: rgba(34, 197, 94, 0.2); color: var(--accent-green); }
+        .status-pill.failed { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+        .status-pill.expired { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+        .status-pill.repeating { background: rgba(168, 85, 247, 0.2); color: var(--accent-purple); }
+        
+        .mono {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+        }
+        
+        .time-ago {
+            color: var(--text-secondary);
+        }
+        
+        .empty-state {
+            padding: 3rem;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+        
+        .rate-limit-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            padding: 1.5rem;
+        }
+        
+        .rate-limit-card {
+            background: var(--bg-card);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        
+        .rate-limit-name {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .rate-limit-bar {
+            height: 8px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 0.5rem;
+        }
+        
+        .rate-limit-fill {
+            height: 100%;
+            background: var(--accent-blue);
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+        
+        .rate-limit-text {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+        
+        .footer a {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+        
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            th, td {
+                padding: 0.75rem 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <h1>Durex Dashboard</h1>
+            </div>
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                <span>Connected</span>
+            </div>
+        </header>
+        
+        <div class="stats-grid">
+            <div class="stat-card pending">
+                <div class="stat-label">Pending</div>
+                <div class="stat-value" id="pending-count">-</div>
+            </div>
+            <div class="stat-card running">
+                <div class="stat-label">In Queue</div>
+                <div class="stat-value" id="queue-count">-</div>
+            </div>
+            <div class="stat-card completed">
+                <div class="stat-label">Completed</div>
+                <div class="stat-value" id="completed-count">-</div>
+            </div>
+            <div class="stat-card failed">
+                <div class="stat-label">Failed</div>
+                <div class="stat-value" id="failed-count">-</div>
+            </div>
+            <div class="stat-card workers">
+                <div class="stat-label">Workers</div>
+                <div class="stat-value" id="worker-count">-</div>
+            </div>
+        </div>
+        
+        <div class="section" id="rate-limits-section" style="display: none;">
+            <div class="section-header">
+                <h2 class="section-title">Rate Limits</h2>
+            </div>
+            <div class="rate-limit-grid" id="rate-limits">
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Recent Commands</h2>
+                <div class="section-actions">
+                    <button class="btn btn-secondary" onclick="refreshCommands()">Refresh</button>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Status</th>
+                        <th>Attempt</th>
+                        <th>Created</th>
+                        <th>Correlation</th>
+                    </tr>
+                </thead>
+                <tbody id="commands-table">
+                    <tr>
+                        <td colspan="6" class="empty-state">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <footer class="footer">
+            Powered by <a href="https://github.com/simonovic86/durex" target="_blank">Durex</a> - Durable Execution Framework for Go
+        </footer>
+    </div>
+    
+    <script>
+        const API_BASE = window.location.origin + '/api';
+        
+        function formatTimeAgo(dateStr) {
+            if (!dateStr) return '-';
+            const date = new Date(dateStr);
+            const now = new Date();
+            const seconds = Math.floor((now - date) / 1000);
+            
+            if (seconds < 60) return `${seconds}s ago`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+            if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+            return `${Math.floor(seconds / 86400)}d ago`;
+        }
+        
+        function truncateId(id) {
+            if (!id || id.length <= 12) return id;
+            return id.substring(0, 8) + '...';
+        }
+        
+        async function fetchStats() {
+            try {
+                const res = await fetch(API_BASE + '/stats');
+                const data = await res.json();
+                
+                document.getElementById('pending-count').textContent = data.pending || 0;
+                document.getElementById('queue-count').textContent = data.queue_size || 0;
+                document.getElementById('completed-count').textContent = data.completed || 0;
+                document.getElementById('failed-count').textContent = data.failed || 0;
+                document.getElementById('worker-count').textContent = data.worker_count || 0;
+                
+                // Rate limits
+                if (data.rate_limit && data.rate_limit.commands) {
+                    const section = document.getElementById('rate-limits-section');
+                    const container = document.getElementById('rate-limits');
+                    section.style.display = 'block';
+                    
+                    let html = '';
+                    
+                    if (data.rate_limit.global_limit > 0) {
+                        const pct = (data.rate_limit.global_current / data.rate_limit.global_limit) * 100;
+                        html += `
+                            <div class="rate-limit-card">
+                                <div class="rate-limit-name">Global</div>
+                                <div class="rate-limit-bar">
+                                    <div class="rate-limit-fill" style="width: ${pct}%"></div>
+                                </div>
+                                <div class="rate-limit-text">${data.rate_limit.global_current} / ${data.rate_limit.global_limit}</div>
+                            </div>
+                        `;
+                    }
+                    
+                    for (const [name, stats] of Object.entries(data.rate_limit.commands)) {
+                        const pct = (stats.current / stats.limit) * 100;
+                        html += `
+                            <div class="rate-limit-card">
+                                <div class="rate-limit-name">${name}</div>
+                                <div class="rate-limit-bar">
+                                    <div class="rate-limit-fill" style="width: ${pct}%"></div>
+                                </div>
+                                <div class="rate-limit-text">${stats.current} / ${stats.limit} (${stats.waiting} waiting)</div>
+                            </div>
+                        `;
+                    }
+                    
+                    container.innerHTML = html || '<div class="empty-state">No rate limits configured</div>';
+                }
+            } catch (err) {
+                console.error('Failed to fetch stats:', err);
+            }
+        }
+        
+        async function fetchCommands() {
+            try {
+                const res = await fetch(API_BASE + '/commands?limit=20');
+                const data = await res.json();
+                
+                const tbody = document.getElementById('commands-table');
+                
+                if (!data.commands || data.commands.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No commands found</td></tr>';
+                    return;
+                }
+                
+                tbody.innerHTML = data.commands.map(cmd => `
+                    <tr>
+                        <td class="mono" title="${cmd.id}">${truncateId(cmd.id)}</td>
+                        <td><strong>${cmd.name}</strong></td>
+                        <td><span class="status-pill ${cmd.status.toLowerCase()}">${cmd.status}</span></td>
+                        <td>${cmd.attempt || 0}</td>
+                        <td class="time-ago">${formatTimeAgo(cmd.created_at)}</td>
+                        <td class="mono">${truncateId(cmd.correlation_id) || '-'}</td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error('Failed to fetch commands:', err);
+            }
+        }
+        
+        function refreshCommands() {
+            fetchCommands();
+        }
+        
+        // Initial load
+        fetchStats();
+        fetchCommands();
+        
+        // Auto-refresh every 2 seconds
+        setInterval(fetchStats, 2000);
+        setInterval(fetchCommands, 5000);
+    </script>
+</body>
+</html>

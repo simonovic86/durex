@@ -111,6 +111,19 @@ type TransactionalStorage interface {
 	Begin(ctx context.Context) (Transaction, error)
 }
 
+// LockingStorage extends Storage with row-level locking for safe concurrent access.
+// Implement this interface for multi-instance deployments.
+type LockingStorage interface {
+	Storage
+
+	// ClaimPending atomically finds and claims up to limit pending commands.
+	// Returns commands that are ready to execute (ReadyAt <= now).
+	// Uses row-level locking (FOR UPDATE SKIP LOCKED in PostgreSQL) to prevent
+	// multiple executors from claiming the same command.
+	// The returned commands have their status set to STARTED.
+	ClaimPending(ctx context.Context, limit int) ([]*Instance, error)
+}
+
 // Transaction represents a storage transaction.
 type Transaction interface {
 	Storage

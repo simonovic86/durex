@@ -208,6 +208,31 @@ Access these in your command:
 		// ...
 	}
 
+# Web Dashboard
+
+Enable the built-in monitoring dashboard:
+
+	// Simple standalone server
+	go executor.ServeDashboard(":8080")
+
+	// Or integrate with existing HTTP server
+	http.Handle("/durex/", http.StripPrefix("/durex", executor.DashboardHandler()))
+
+# Multi-Instance Deployment
+
+For horizontal scaling with PostgreSQL, Durex automatically uses row-level locking:
+
+	db, _ := sql.Open("postgres", "postgres://...")
+	store := storage.NewPostgres(db)
+	store.Migrate(ctx)
+
+	executor := durex.New(store,
+		durex.WithPollInterval(500*time.Millisecond),
+		durex.WithClaimBatchSize(20),
+	)
+
+Multiple executor instances can safely run concurrently - each will claim different commands.
+
 # Production Considerations
 
 For production deployments:
