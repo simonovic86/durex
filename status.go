@@ -24,12 +24,16 @@ const (
 
 	// StatusCancelled indicates the command was cancelled before completion.
 	StatusCancelled Status = "CANCELLED"
+
+	// StatusDeadLetter indicates the command failed permanently and was moved to DLQ.
+	// Commands in DLQ can be inspected and replayed manually.
+	StatusDeadLetter Status = "DEAD_LETTER"
 )
 
 // IsTerminal returns true if the status represents a final state.
 func (s Status) IsTerminal() bool {
 	switch s {
-	case StatusCompleted, StatusFailed, StatusExpired, StatusCancelled:
+	case StatusCompleted, StatusFailed, StatusExpired, StatusCancelled, StatusDeadLetter:
 		return true
 	default:
 		return false

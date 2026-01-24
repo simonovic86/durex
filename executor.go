@@ -46,6 +46,9 @@ type Executor struct {
 	// Dashboard
 	dashboardAddr string
 
+	// Dead Letter Queue
+	deadLetterEnabled bool
+
 	// Extensibility
 	middleware   []Middleware
 	metrics      MetricsCollector
@@ -312,6 +315,115 @@ func (e *Executor) Cancel(ctx context.Context, id string) error {
 	return e.storage.Update(ctx, instance)
 }
 
+// CancelByTag cancels all pending commands with the given tag.
+// Returns the number of commands cancelled.
+// Requires QueryableStorage to support tag queries.
+func (e *Executor) CancelByTag(ctx context.Context, tag string) (int, error) {
+	qs, ok := e.storage.(QueryableStorage)
+	if !ok {
+		return 0, fmt.Errorf("durex: storage does not support tag queries")
+	}
+
+	// Find commands with this tag
+	commands, err := qs.Find(ctx, Query{
+		Tags: []string{tag},
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	cancelled := 0
+	now := time.Now()
+	for _, cmd := range commands {
+		if cmd.Status.IsTerminal() {
+			continue
+		}
+		cmd.Status = StatusCancelled
+		cmd.CompletedAt = &now
+		if err := e.storage.Update(ctx, cmd); err != nil {
+			e.logger.Error("durex: failed to cancel command",
+				"id", cmd.ID,
+				"error", err,
+			)
+			continue
+		}
+		cancelled++
+	}
+
+	return cancelled, nil
+}
+
+// ReplayFromDLQ replays a dead-lettered command.
+// The command is reset to PENDING status and will be executed again.
+func (e *Executor) ReplayFromDLQ(ctx context.Context, id string) error {
+	instance, err := e.storage.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if instance.Status != StatusDeadLetter {
+		return fmt.Errorf("durex: command is not in dead letter queue (status: %s)", instance.Status)
+	}
+
+	// Reset for retry
+	instance.Status = StatusPending
+	instance.Error = ""
+	instance.StartedAt = nil
+	instance.CompletedAt = nil
+	instance.Attempt = 0
+	instance.ReadyAt = time.Now()
+
+	if err := e.storage.Update(ctx, instance); err != nil {
+		return err
+	}
+
+	// Schedule for execution
+	e.schedule(instance)
+
+	e.logger.Info("durex: replayed command from DLQ",
+		"id", instance.ID,
+		"name", instance.Name,
+	)
+
+	return nil
+}
+
+// FindDeadLettered returns all commands in the dead letter queue.
+func (e *Executor) FindDeadLettered(ctx context.Context) ([]*Instance, error) {
+	return e.storage.FindByStatus(ctx, StatusDeadLetter)
+}
+
+// PurgeDLQ removes dead-lettered commands older than the specified age.
+// Returns the number of commands purged.
+func (e *Executor) PurgeDLQ(ctx context.Context, age time.Duration) (int, error) {
+	commands, err := e.storage.FindByStatus(ctx, StatusDeadLetter)
+	if err != nil {
+		return 0, err
+	}
+
+	cutoff := time.Now().Add(-age)
+	purged := 0
+
+	for _, cmd := range commands {
+		if cmd.CompletedAt != nil && cmd.CompletedAt.Before(cutoff) {
+			if err := e.storage.Delete(ctx, cmd.ID); err != nil {
+				e.logger.Error("durex: failed to purge DLQ command",
+					"id", cmd.ID,
+					"error", err,
+				)
+				continue
+			}
+			purged++
+		}
+	}
+
+	if purged > 0 {
+		e.logger.Info("durex: purged dead letter queue", "count", purged)
+	}
+
+	return purged, nil
+}
+
 // Stats returns current executor statistics.
 func (e *Executor) Stats(ctx context.Context) (*Stats, error) {
 	pending, err := e.storage.Count(ctx, ptr(StatusPending))
@@ -329,10 +441,16 @@ func (e *Executor) Stats(ctx context.Context) (*Stats, error) {
 		return nil, err
 	}
 
+	deadLetter, err := e.storage.Count(ctx, ptr(StatusDeadLetter))
+	if err != nil {
+		return nil, err
+	}
+
 	stats := &Stats{
 		Pending:            pending,
 		Completed:          completed,
 		Failed:             failed,
+		DeadLetter:         deadLetter,
 		QueueSize:          len(e.queue),
 		RegisteredCommands: e.registry.Count(),
 		WorkerCount:        e.parallelism,
@@ -351,6 +469,7 @@ type Stats struct {
 	Pending            int64
 	Completed          int64
 	Failed             int64
+	DeadLetter         int64
 	QueueSize          int
 	RegisteredCommands int
 	WorkerCount        int
@@ -810,8 +929,12 @@ func (e *Executor) handleError(ctx context.Context, instance *Instance, handler 
 		return nil
 	}
 
-	// Mark failed
-	instance.Status = StatusFailed
+	// Mark failed - use DLQ status if enabled
+	if e.deadLetterEnabled {
+		instance.Status = StatusDeadLetter
+	} else {
+		instance.Status = StatusFailed
+	}
 	instance.Error = err.Error()
 	instance.CompletedAt = &now
 	if updateErr := e.storage.Update(ctx, instance); updateErr != nil {

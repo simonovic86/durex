@@ -25,6 +25,9 @@ Durex enables you to build reliable, persistent command/task execution systems w
 - ⏱️ **Execution Timeouts** - Per-command timeout with context cancellation
 - 🛡️ **Panic Recovery** - Workers survive panics and mark commands as failed
 - 🔧 **Stuck Command Recovery** - Automatic detection and recovery of stuck commands
+- 📬 **Dead Letter Queue** - Failed commands moved to DLQ for inspection and replay
+- ❌ **Command Cancellation** - Cancel pending commands by ID or tag
+- 🏥 **Health Endpoint** - `/api/health` for load balancer health checks
 
 ## Architecture
 
@@ -333,6 +336,7 @@ executor := durex.New(store,
     durex.WithCleanupInterval(time.Hour),  // Auto-cleanup
     durex.WithGracefulShutdown(30*time.Second),
     durex.WithDashboard(":8080"),          // Enable web dashboard
+    durex.WithDeadLetterQueue(),           // Enable DLQ for failed commands
     durex.WithMiddleware(loggingMiddleware),
     durex.WithBackoff(durex.DefaultExponentialBackoff()), // Retry backoff
     durex.WithRateLimit("sendEmail", 10),  // Max 10 concurrent emails
@@ -543,6 +547,56 @@ executor := durex.New(store,
     }),
 )
 ```
+
+### Dead Letter Queue
+
+Enable DLQ to preserve failed commands for inspection and replay:
+
+```go
+executor := durex.New(store,
+    durex.WithDeadLetterQueue(),
+)
+
+// Later, inspect failed commands
+deadLettered, _ := executor.FindDeadLettered(ctx)
+
+// Replay a specific command
+executor.ReplayFromDLQ(ctx, "cmd_abc123")
+
+// Purge old dead-lettered commands
+purged, _ := executor.PurgeDLQ(ctx, 7*24*time.Hour) // Older than 7 days
+```
+
+### Command Cancellation
+
+Cancel pending commands programmatically:
+
+```go
+// Cancel a specific command
+executor.Cancel(ctx, "cmd_abc123")
+
+// Cancel all commands with a tag (requires QueryableStorage)
+cancelled, _ := executor.CancelByTag(ctx, "batch-123")
+```
+
+### Health Endpoint
+
+The dashboard includes a health endpoint for load balancers:
+
+```
+GET /api/health
+
+{
+  "status": "healthy",
+  "started": true,
+  "storage_ok": true,
+  "worker_count": 4,
+  "queue_depth": 0,
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+Status values: `healthy`, `degraded` (shutting down), `unhealthy` (not started or storage error).
 
 ## Examples
 

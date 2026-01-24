@@ -142,6 +142,19 @@ func WithDashboard(addr string) Option {
 	}
 }
 
+// WithDeadLetterQueue enables the dead letter queue.
+// When enabled, commands that fail after exhausting all retries are moved
+// to DEAD_LETTER status instead of FAILED. This allows for manual inspection
+// and replay of failed commands.
+//
+// Use ReplayFromDLQ() to retry a dead-lettered command,
+// and PurgeDLQ() to remove old dead-lettered commands.
+func WithDeadLetterQueue() Option {
+	return func(e *Executor) {
+		e.deadLetterEnabled = true
+	}
+}
+
 // WithMetrics enables metrics collection.
 // The provided MetricsCollector will receive execution metrics.
 func WithMetrics(collector MetricsCollector) Option {

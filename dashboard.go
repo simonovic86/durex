@@ -42,6 +42,7 @@ func (e *Executor) DashboardHandler() http.Handler {
 	// API endpoints
 	mux.HandleFunc("/api/stats", e.handleAPIStats)
 	mux.HandleFunc("/api/commands", e.handleAPICommands)
+	mux.HandleFunc("/api/health", e.handleAPIHealth)
 
 	return mux
 }
@@ -83,6 +84,7 @@ func (e *Executor) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 		Pending:            stats.Pending,
 		Completed:          stats.Completed,
 		Failed:             stats.Failed,
+		DeadLetter:         stats.DeadLetter,
 		QueueSize:          stats.QueueSize,
 		RegisteredCommands: stats.RegisteredCommands,
 		WorkerCount:        stats.WorkerCount,
@@ -181,12 +183,80 @@ func (e *Executor) handleAPICommands(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// handleAPIHealth returns executor health status for load balancers.
+func (e *Executor) handleAPIHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	health := healthResponse{
+		Status:      "healthy",
+		Started:     e.started.Load(),
+		WorkerCount: e.parallelism,
+		Timestamp:   time.Now(),
+	}
+
+	// Check if executor is running
+	if !e.started.Load() {
+		health.Status = "unhealthy"
+		health.Message = "executor not started"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(health)
+		return
+	}
+
+	// Check if stopping
+	if e.stopping.Load() {
+		health.Status = "degraded"
+		health.Message = "executor is shutting down"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(health)
+		return
+	}
+
+	// Check storage connectivity
+	_, err := e.storage.Count(ctx, nil)
+	if err != nil {
+		health.Status = "unhealthy"
+		health.StorageOK = false
+		health.Message = "storage error: " + err.Error()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(health)
+		return
+	}
+	health.StorageOK = true
+
+	// Get queue depth
+	health.QueueDepth = len(e.queue)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(health)
+}
+
 // API response types
+
+type healthResponse struct {
+	Status      string    `json:"status"` // healthy, degraded, unhealthy
+	Started     bool      `json:"started"`
+	StorageOK   bool      `json:"storage_ok"`
+	WorkerCount int       `json:"worker_count"`
+	QueueDepth  int       `json:"queue_depth"`
+	Message     string    `json:"message,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+}
 
 type statsResponse struct {
 	Pending            int64              `json:"pending"`
 	Completed          int64              `json:"completed"`
 	Failed             int64              `json:"failed"`
+	DeadLetter         int64              `json:"dead_letter"`
 	QueueSize          int                `json:"queue_size"`
 	RegisteredCommands int                `json:"registered_commands"`
 	WorkerCount        int                `json:"worker_count"`
