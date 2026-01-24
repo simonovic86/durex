@@ -23,6 +23,7 @@ func main() {
 	// Create executor with in-memory storage
 	executor := durex.New(storage.NewMemory(),
 		durex.WithParallelism(4),
+		durex.WithDashboard(":8080"),
 	)
 
 	// ============================================

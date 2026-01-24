@@ -22,6 +22,9 @@ Durex enables you to build reliable, persistent command/task execution systems w
 - 🔍 **Tracing** - Trace and correlation IDs across command chains
 - 🔒 **Multi-Instance Safe** - Row-level locking for horizontal scaling
 - 📊 **Web Dashboard** - Built-in real-time monitoring UI
+- ⏱️ **Execution Timeouts** - Per-command timeout with context cancellation
+- 🛡️ **Panic Recovery** - Workers survive panics and mark commands as failed
+- 🔧 **Stuck Command Recovery** - Automatic detection and recovery of stuck commands
 
 ## Architecture
 
@@ -275,6 +278,35 @@ executor.HandleFunc("timeoutTask", taskFn,
 )
 ```
 
+## Execution Timeouts
+
+Limit how long each command execution can take. Unlike deadlines (which prevent starting after a time), timeouts cancel long-running executions:
+
+```go
+// Per-command timeout
+executor.Add(ctx, durex.Spec{
+    Name:    "slowTask",
+    Timeout: 30 * time.Second,  // Cancel if takes longer than 30s
+})
+
+// Default timeout for all commands
+executor := durex.New(store,
+    durex.WithDefaultTimeout(time.Minute),
+)
+
+// Command-level override
+executor.Add(ctx, durex.Spec{
+    Name:    "quickTask",
+    Timeout: 5 * time.Second,  // Override default
+})
+```
+
+When a timeout occurs:
+- The context passed to your handler is cancelled
+- The command is marked as failed
+- Retries are attempted if configured
+- Your handler should check `ctx.Done()` for graceful cancellation
+
 ## Storage Backends
 
 ```go
@@ -297,12 +329,15 @@ store.Migrate(ctx)
 executor := durex.New(store,
     durex.WithParallelism(8),              // Worker count
     durex.WithDefaultRetries(3),           // Default retries
+    durex.WithDefaultTimeout(30*time.Second), // Default execution timeout
     durex.WithCleanupInterval(time.Hour),  // Auto-cleanup
     durex.WithGracefulShutdown(30*time.Second),
+    durex.WithDashboard(":8080"),          // Enable web dashboard
     durex.WithMiddleware(loggingMiddleware),
     durex.WithBackoff(durex.DefaultExponentialBackoff()), // Retry backoff
     durex.WithRateLimit("sendEmail", 10),  // Max 10 concurrent emails
     durex.WithGlobalRateLimit(100),        // Max 100 total concurrent
+    durex.WithStuckCommandRecovery(time.Minute, 5*time.Minute), // Recover stuck commands
 )
 ```
 
@@ -422,7 +457,12 @@ func loggingMiddleware(ctx durex.MiddlewareContext, next func() (durex.Result, e
 Durex includes a built-in real-time monitoring dashboard with zero external dependencies:
 
 ```go
-// Simple: start dashboard on a port
+// Recommended: enable via option (auto-starts with executor)
+executor := durex.New(store,
+    durex.WithDashboard(":8080"),
+)
+
+// Or start manually
 go executor.ServeDashboard(":8080")
 
 // Or integrate with existing server
@@ -453,6 +493,56 @@ executor := durex.New(store,
 ```
 
 This enables safe deployment of multiple executor instances behind a load balancer.
+
+## Reliability Features
+
+### Panic Recovery
+
+Durex automatically recovers from panics in command handlers. Workers continue processing other commands:
+
+```go
+executor.HandleFunc("riskyTask", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    panic("something went wrong")  // Worker survives this!
+})
+```
+
+When a panic occurs:
+- The panic is logged with command details
+- The command is marked as `FAILED` with the panic message
+- The error handler is called (if configured)
+- Workers continue processing other commands
+
+### Stuck Command Recovery
+
+Commands can get stuck in `STARTED` status if a worker crashes or the process restarts. Enable automatic recovery:
+
+```go
+executor := durex.New(store,
+    durex.WithStuckCommandRecovery(
+        time.Minute,      // Check every minute
+        5*time.Minute,    // Commands stuck >5 min are recovered
+    ),
+)
+```
+
+Recovered commands are reset to `PENDING` and re-executed.
+
+### Error Handling
+
+Global error handler for all command failures:
+
+```go
+executor := durex.New(store,
+    durex.WithErrorHandler(func(cmd *durex.Instance, err error) {
+        slog.Error("Command failed",
+            "id", cmd.ID,
+            "name", cmd.Name,
+            "error", err,
+        )
+        // Send to error tracking service, etc.
+    }),
+)
+```
 
 ## Examples
 

@@ -128,6 +128,20 @@ func WithGracefulShutdown(d time.Duration) Option {
 	}
 }
 
+// WithDashboard enables the web dashboard on the specified address.
+// The dashboard provides a UI for monitoring commands and executor stats.
+//
+// Example:
+//
+//	executor := durex.New(store, durex.WithDashboard(":8080"))
+//
+// The dashboard will be available at http://localhost:8080 after Start().
+func WithDashboard(addr string) Option {
+	return func(e *Executor) {
+		e.dashboardAddr = addr
+	}
+}
+
 // WithMetrics enables metrics collection.
 // The provided MetricsCollector will receive execution metrics.
 func WithMetrics(collector MetricsCollector) Option {

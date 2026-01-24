@@ -43,6 +43,9 @@ type Executor struct {
 	stuckCheckInterval time.Duration
 	stuckThreshold     time.Duration
 
+	// Dashboard
+	dashboardAddr string
+
 	// Extensibility
 	middleware   []Middleware
 	metrics      MetricsCollector
@@ -161,6 +164,16 @@ func (e *Executor) Start(ctx context.Context) error {
 	// Start stuck command recovery routine
 	if e.stuckCheckInterval > 0 {
 		go e.stuckCommandRecoveryLoop()
+	}
+
+	// Start dashboard if configured
+	if e.dashboardAddr != "" {
+		go func() {
+			e.logger.Info("durex: starting dashboard", "addr", e.dashboardAddr)
+			if err := e.ServeDashboard(e.dashboardAddr); err != nil {
+				e.logger.Error("durex: dashboard server error", "error", err)
+			}
+		}()
 	}
 
 	e.started.Store(true)
