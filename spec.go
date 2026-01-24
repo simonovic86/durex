@@ -24,6 +24,12 @@ type Spec struct {
 	// If not set, defaults to executor's DefaultRepeatInterval.
 	Period time.Duration `json:"period,omitempty"`
 
+	// Timeout sets the maximum execution time per attempt.
+	// If the handler doesn't complete within this duration, the context is cancelled
+	// and the command is treated as failed (will retry if retries remain).
+	// This is different from Deadline which prevents starting after a time.
+	Timeout time.Duration `json:"timeout,omitempty"`
+
 	// Deadline sets a relative deadline from now.
 	// If the command hasn't started by this time, Expired() is called instead.
 	// Takes precedence over DeadlineAt if both are set.
@@ -87,6 +93,13 @@ func (s Spec) WithDelay(d time.Duration) Spec {
 // WithRetries returns a copy of the Spec with the given retry count.
 func (s Spec) WithRetries(n int) Spec {
 	s.Retries = n
+	return s
+}
+
+// WithTimeout returns a copy of the Spec with the given execution timeout.
+// The timeout limits how long each execution attempt can take.
+func (s Spec) WithTimeout(d time.Duration) Spec {
+	s.Timeout = d
 	return s
 }
 

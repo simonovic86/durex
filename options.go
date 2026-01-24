@@ -47,6 +47,19 @@ func WithDefaultRetries(n int) Option {
 	}
 }
 
+// WithDefaultTimeout sets the default execution timeout for commands
+// that don't specify their own.
+// Default is 0 (no timeout).
+//
+// The timeout limits how long each execution attempt can take.
+// If the handler doesn't complete within this duration, the context is cancelled
+// and the command is treated as failed (will retry if retries remain).
+func WithDefaultTimeout(d time.Duration) Option {
+	return func(e *Executor) {
+		e.defaultTimeout = d
+	}
+}
+
 // WithDefaultRepeatInterval sets the default period for repeating commands.
 // Default is 1 minute.
 func WithDefaultRepeatInterval(d time.Duration) Option {
@@ -83,6 +96,24 @@ func WithCleanupAge(d time.Duration) Option {
 	return func(e *Executor) {
 		if d > 0 {
 			e.cleanupAge = d
+		}
+	}
+}
+
+// WithStuckCommandRecovery enables automatic recovery of stuck commands.
+// Stuck commands are those in STARTED status for longer than threshold,
+// which may indicate a worker crash or process restart.
+//
+// checkInterval: how often to check for stuck commands
+// threshold: how long a command must be in STARTED status to be considered stuck
+//
+// By default, stuck command recovery is disabled.
+// Recommended settings: checkInterval=1m, threshold=5m
+func WithStuckCommandRecovery(checkInterval, threshold time.Duration) Option {
+	return func(e *Executor) {
+		e.stuckCheckInterval = checkInterval
+		if threshold > 0 {
+			e.stuckThreshold = threshold
 		}
 	}
 }

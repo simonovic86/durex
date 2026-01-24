@@ -185,11 +185,14 @@ func TestExecutor_Delay(t *testing.T) {
 	store := storage.NewMemory()
 	executor := durex.New(store, durex.WithParallelism(1))
 
+	var mu sync.Mutex
 	var executedAt time.Time
 	cmd := &TestCommand{
 		name: "delayedCmd",
 		executeFn: func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+			mu.Lock()
 			executedAt = time.Now()
+			mu.Unlock()
 			return durex.Empty(), nil
 		},
 	}
@@ -211,12 +214,16 @@ func TestExecutor_Delay(t *testing.T) {
 	// Wait for delayed execution
 	time.Sleep(200 * time.Millisecond)
 
-	if executedAt.IsZero() {
+	mu.Lock()
+	execAt := executedAt
+	mu.Unlock()
+
+	if execAt.IsZero() {
 		t.Error("Command was not executed")
 		return
 	}
 
-	delay := executedAt.Sub(startTime)
+	delay := execAt.Sub(startTime)
 	if delay < 90*time.Millisecond {
 		t.Errorf("Command executed too early: %v", delay)
 	}

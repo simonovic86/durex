@@ -62,6 +62,10 @@ type Instance struct {
 	// DeadlineAt is the execution deadline (nil if no deadline).
 	DeadlineAt *time.Time `json:"deadline_at,omitempty"`
 
+	// Timeout is the maximum execution time per attempt.
+	// If the handler doesn't complete within this duration, the context is cancelled.
+	Timeout time.Duration `json:"timeout,omitempty"`
+
 	// Period is the repeat interval for recurring commands.
 	Period time.Duration `json:"period,omitempty"`
 
@@ -206,10 +210,12 @@ func (i *Instance) MarshalJSON() ([]byte, error) {
 	type Alias Instance
 	return json.Marshal(&struct {
 		*Alias
-		Period int64 `json:"period_ns,omitempty"`
+		Period  int64 `json:"period_ns,omitempty"`
+		Timeout int64 `json:"timeout_ns,omitempty"`
 	}{
-		Alias:  (*Alias)(i),
-		Period: int64(i.Period),
+		Alias:   (*Alias)(i),
+		Period:  int64(i.Period),
+		Timeout: int64(i.Timeout),
 	})
 }
 
@@ -218,7 +224,8 @@ func (i *Instance) UnmarshalJSON(data []byte) error {
 	type Alias Instance
 	aux := &struct {
 		*Alias
-		Period int64 `json:"period_ns,omitempty"`
+		Period  int64 `json:"period_ns,omitempty"`
+		Timeout int64 `json:"timeout_ns,omitempty"`
 	}{
 		Alias: (*Alias)(i),
 	}
@@ -226,6 +233,7 @@ func (i *Instance) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	i.Period = time.Duration(aux.Period)
+	i.Timeout = time.Duration(aux.Timeout)
 	return nil
 }
 

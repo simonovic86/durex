@@ -28,6 +28,7 @@ type Executor struct {
 	parallelism           int
 	queueSize             int
 	defaultRetries        int
+	defaultTimeout        time.Duration
 	defaultRepeatInterval time.Duration
 	maxDelay              time.Duration
 	cleanupInterval       time.Duration
@@ -37,6 +38,10 @@ type Executor struct {
 	backoff               BackoffStrategy
 	pollInterval          time.Duration
 	claimBatchSize        int
+
+	// Stuck command recovery
+	stuckCheckInterval time.Duration
+	stuckThreshold     time.Duration
 
 	// Extensibility
 	middleware   []Middleware
@@ -52,6 +57,10 @@ type Executor struct {
 	started  atomic.Bool
 	stopping atomic.Bool
 	mu       sync.RWMutex
+
+	// Timer tracking for delayed commands
+	delayedTimers   map[string]*time.Timer
+	delayedTimersMu sync.Mutex
 }
 
 // New creates a new Executor with the given storage and options.
@@ -66,16 +75,20 @@ func New(storage Storage, opts ...Option) *Executor {
 		parallelism:           4,
 		queueSize:             1000,
 		defaultRetries:        0,
+		defaultTimeout:        0, // No default timeout
 		defaultRepeatInterval: time.Minute,
 		maxDelay:              24 * time.Hour,
 		cleanupInterval:       time.Hour,
 		cleanupAge:            24 * time.Hour,
 		shutdownTimeout:       30 * time.Second,
+		stuckCheckInterval:    0, // Disabled by default
+		stuckThreshold:        5 * time.Minute,
 		backoff:               NoBackoff(),
 		pollInterval:          time.Second,
 		claimBatchSize:        10,
 		ctx:                   ctx,
 		cancel:                cancel,
+		delayedTimers:         make(map[string]*time.Timer),
 	}
 
 	for _, opt := range opts {
@@ -145,6 +158,11 @@ func (e *Executor) Start(ctx context.Context) error {
 		go e.cleanupLoop()
 	}
 
+	// Start stuck command recovery routine
+	if e.stuckCheckInterval > 0 {
+		go e.stuckCommandRecoveryLoop()
+	}
+
 	e.started.Store(true)
 
 	return nil
@@ -159,6 +177,9 @@ func (e *Executor) Stop() error {
 
 	e.stopping.Store(true)
 	e.logger.Info("durex: stopping executor")
+
+	// Cancel all pending delayed timers to release resources
+	e.cancelDelayedTimers()
 
 	// Signal shutdown
 	e.cancel()
@@ -179,6 +200,22 @@ func (e *Executor) Stop() error {
 
 	e.started.Store(false)
 	return nil
+}
+
+// cancelDelayedTimers stops all pending delayed timers.
+func (e *Executor) cancelDelayedTimers() {
+	e.delayedTimersMu.Lock()
+	defer e.delayedTimersMu.Unlock()
+
+	count := len(e.delayedTimers)
+	for id, timer := range e.delayedTimers {
+		timer.Stop()
+		delete(e.delayedTimers, id)
+	}
+
+	if count > 0 {
+		e.logger.Debug("durex: cancelled delayed timers", "count", count)
+	}
 }
 
 // Add queues a new command for execution.
@@ -212,15 +249,19 @@ func (e *Executor) Add(ctx context.Context, spec Spec) (*Instance, error) {
 		return nil, fmt.Errorf("durex: failed to persist command: %w", err)
 	}
 
+	// Clone before scheduling to avoid data races - once scheduled, workers
+	// may immediately start modifying the instance (retries, status, etc.)
+	result := instance.Clone()
+
 	e.schedule(instance)
 
 	e.logger.Debug("durex: command added",
-		"id", instance.ID,
-		"name", instance.Name,
-		"delay", time.Until(instance.ReadyAt),
+		"id", result.ID,
+		"name", result.Name,
+		"delay", time.Until(result.ReadyAt),
 	)
 
-	return instance, nil
+	return result, nil
 }
 
 // AddMany queues multiple commands for execution.
@@ -304,7 +345,7 @@ type Stats struct {
 }
 
 // worker processes commands from the queue (single-instance mode).
-func (e *Executor) worker(id int) {
+func (e *Executor) worker(_ int) {
 	defer e.wg.Done()
 
 	for {
@@ -315,20 +356,53 @@ func (e *Executor) worker(id int) {
 			if !ok {
 				return
 			}
-			if err := e.execute(instance); err != nil {
-				e.logger.Error("durex: command execution failed",
+			e.safeExecute(instance)
+		}
+	}
+}
+
+// safeExecute wraps execute with panic recovery.
+func (e *Executor) safeExecute(instance *Instance) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("durex: panic in command execution",
+				"id", instance.ID,
+				"name", instance.Name,
+				"panic", r,
+			)
+
+			// Mark the command as failed
+			instance.Status = StatusFailed
+			instance.Error = fmt.Sprintf("panic: %v", r)
+			now := time.Now()
+			instance.CompletedAt = &now
+
+			if err := e.storage.Update(e.ctx, instance); err != nil {
+				e.logger.Error("durex: failed to update panicked command",
 					"id", instance.ID,
-					"name", instance.Name,
 					"error", err,
 				)
 			}
+
+			// Call error handler if set
+			if e.errorHandler != nil {
+				e.errorHandler(instance, fmt.Errorf("panic: %v", r))
+			}
 		}
+	}()
+
+	if err := e.execute(instance); err != nil {
+		e.logger.Error("durex: command execution failed",
+			"id", instance.ID,
+			"name", instance.Name,
+			"error", err,
+		)
 	}
 }
 
 // pollingWorker claims commands directly from storage (multi-instance safe).
 // Uses row-level locking to prevent multiple executors from claiming the same command.
-func (e *Executor) pollingWorker(id int) {
+func (e *Executor) pollingWorker(_ int) {
 	defer e.wg.Done()
 
 	lockingStorage := e.storage.(LockingStorage)
@@ -364,19 +438,52 @@ func (e *Executor) claimAndExecute(storage LockingStorage) {
 			return
 		}
 
-		if err := e.executeClaimedCommand(instance); err != nil {
-			e.logger.Error("durex: command execution failed",
+		e.safeExecuteClaimed(instance)
+	}
+}
+
+// safeExecuteClaimed wraps executeClaimedCommand with panic recovery.
+func (e *Executor) safeExecuteClaimed(instance *Instance) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("durex: panic in command execution",
 				"id", instance.ID,
 				"name", instance.Name,
-				"error", err,
+				"panic", r,
 			)
+
+			// Mark the command as failed
+			instance.Status = StatusFailed
+			instance.Error = fmt.Sprintf("panic: %v", r)
+			now := time.Now()
+			instance.CompletedAt = &now
+
+			if err := e.storage.Update(e.ctx, instance); err != nil {
+				e.logger.Error("durex: failed to update panicked command",
+					"id", instance.ID,
+					"error", err,
+				)
+			}
+
+			// Call error handler if set
+			if e.errorHandler != nil {
+				e.errorHandler(instance, fmt.Errorf("panic: %v", r))
+			}
 		}
+	}()
+
+	if err := e.executeClaimedCommand(instance); err != nil {
+		e.logger.Error("durex: command execution failed",
+			"id", instance.ID,
+			"name", instance.Name,
+			"error", err,
+		)
 	}
 }
 
 // executeClaimedCommand executes a command that was already claimed (status=STARTED).
 func (e *Executor) executeClaimedCommand(instance *Instance) error {
-	ctx := e.ctx
+	baseCtx := e.ctx
 	now := time.Now()
 
 	// Check if cancelled
@@ -386,7 +493,7 @@ func (e *Executor) executeClaimedCommand(instance *Instance) error {
 
 	// Check deadline
 	if instance.DeadlineAt != nil && now.After(*instance.DeadlineAt) {
-		return e.handleExpired(ctx, instance)
+		return e.handleExpired(baseCtx, instance)
 	}
 
 	// Resolve handler
@@ -394,16 +501,16 @@ func (e *Executor) executeClaimedCommand(instance *Instance) error {
 	if err != nil {
 		instance.Status = StatusFailed
 		instance.Error = err.Error()
-		return e.storage.Update(ctx, instance)
+		return e.storage.Update(baseCtx, instance)
 	}
 
 	// Apply rate limiting
 	if e.rateLimiter != nil {
-		release, err := e.rateLimiter.Acquire(ctx, instance.Name)
+		release, err := e.rateLimiter.Acquire(baseCtx, instance.Name)
 		if err != nil {
 			// Context cancelled, reschedule
 			instance.Status = StatusPending
-			return e.storage.Update(ctx, instance)
+			return e.storage.Update(baseCtx, instance)
 		}
 		defer release()
 	}
@@ -419,29 +526,42 @@ func (e *Executor) executeClaimedCommand(instance *Instance) error {
 		"attempt", instance.Attempt,
 	)
 
+	// Create execution context with timeout if specified
+	execCtx := baseCtx
+	var cancel context.CancelFunc
+	if instance.Timeout > 0 {
+		execCtx, cancel = context.WithTimeout(baseCtx, instance.Timeout)
+		defer cancel()
+	}
+
 	// Execute with middleware
-	result, err := e.executeWithMiddleware(ctx, instance, handler)
+	result, err := e.executeWithMiddleware(execCtx, instance, handler)
 
 	// Record duration
 	duration := time.Since(now)
+
+	// Check for timeout
+	if err == nil && execCtx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("durex: command execution timed out after %v", instance.Timeout)
+	}
 
 	if err != nil {
 		if e.metrics != nil {
 			e.metrics.CommandFailed(instance.Name, err)
 		}
-		return e.handleError(ctx, instance, handler, err)
+		return e.handleError(baseCtx, instance, handler, err)
 	}
 
 	if e.metrics != nil {
 		e.metrics.CommandCompleted(instance.Name, duration)
 	}
 
-	return e.handleResult(ctx, instance, handler, result)
+	return e.handleResult(baseCtx, instance, handler, result)
 }
 
 // execute runs a single command instance.
 func (e *Executor) execute(instance *Instance) error {
-	ctx := e.ctx
+	baseCtx := e.ctx
 	now := time.Now()
 
 	// Check if cancelled
@@ -451,7 +571,7 @@ func (e *Executor) execute(instance *Instance) error {
 
 	// Check deadline
 	if instance.DeadlineAt != nil && now.After(*instance.DeadlineAt) {
-		return e.handleExpired(ctx, instance)
+		return e.handleExpired(baseCtx, instance)
 	}
 
 	// Check if ready
@@ -465,12 +585,12 @@ func (e *Executor) execute(instance *Instance) error {
 	if err != nil {
 		instance.Status = StatusFailed
 		instance.Error = err.Error()
-		return e.storage.Update(ctx, instance)
+		return e.storage.Update(baseCtx, instance)
 	}
 
 	// Apply rate limiting
 	if e.rateLimiter != nil {
-		release, err := e.rateLimiter.Acquire(ctx, instance.Name)
+		release, err := e.rateLimiter.Acquire(baseCtx, instance.Name)
 		if err != nil {
 			// Context cancelled, reschedule
 			e.scheduleDelayed(instance)
@@ -483,7 +603,7 @@ func (e *Executor) execute(instance *Instance) error {
 	instance.Status = StatusStarted
 	instance.StartedAt = &now
 	instance.Attempt++
-	if err := e.storage.Update(ctx, instance); err != nil {
+	if err := e.storage.Update(baseCtx, instance); err != nil {
 		return err
 	}
 
@@ -498,24 +618,37 @@ func (e *Executor) execute(instance *Instance) error {
 		"attempt", instance.Attempt,
 	)
 
+	// Create execution context with timeout if specified
+	execCtx := baseCtx
+	var cancel context.CancelFunc
+	if instance.Timeout > 0 {
+		execCtx, cancel = context.WithTimeout(baseCtx, instance.Timeout)
+		defer cancel()
+	}
+
 	// Execute with middleware
-	result, err := e.executeWithMiddleware(ctx, instance, handler)
+	result, err := e.executeWithMiddleware(execCtx, instance, handler)
 
 	// Record duration
 	duration := time.Since(now)
+
+	// Check for timeout
+	if err == nil && execCtx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("durex: command execution timed out after %v", instance.Timeout)
+	}
 
 	if err != nil {
 		if e.metrics != nil {
 			e.metrics.CommandFailed(instance.Name, err)
 		}
-		return e.handleError(ctx, instance, handler, err)
+		return e.handleError(baseCtx, instance, handler, err)
 	}
 
 	if e.metrics != nil {
 		e.metrics.CommandCompleted(instance.Name, duration)
 	}
 
-	return e.handleResult(ctx, instance, handler, result)
+	return e.handleResult(baseCtx, instance, handler, result)
 }
 
 // executeWithMiddleware runs the command through the middleware chain.
@@ -547,7 +680,7 @@ func (e *Executor) executeWithMiddleware(ctx context.Context, instance *Instance
 }
 
 // handleResult processes the execution result.
-func (e *Executor) handleResult(ctx context.Context, instance *Instance, handler Command, result Result) error {
+func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Command, result Result) error {
 	now := time.Now()
 
 	// Handle repeat
@@ -773,7 +906,17 @@ func (e *Executor) scheduleDelayed(instance *Instance) {
 		delay = e.maxDelay
 	}
 
-	time.AfterFunc(delay, func() {
+	// Minimum delay to avoid tight loops
+	if delay < 0 {
+		delay = 0
+	}
+
+	timer := time.AfterFunc(delay, func() {
+		// Remove from tracking when timer fires
+		e.delayedTimersMu.Lock()
+		delete(e.delayedTimers, instance.ID)
+		e.delayedTimersMu.Unlock()
+
 		if e.stopping.Load() {
 			return
 		}
@@ -782,6 +925,15 @@ func (e *Executor) scheduleDelayed(instance *Instance) {
 		case <-e.ctx.Done():
 		}
 	})
+
+	// Track the timer for cleanup on shutdown
+	e.delayedTimersMu.Lock()
+	// Cancel any existing timer for this instance (e.g., if rescheduled)
+	if existing, ok := e.delayedTimers[instance.ID]; ok {
+		existing.Stop()
+	}
+	e.delayedTimers[instance.ID] = timer
+	e.delayedTimersMu.Unlock()
 }
 
 // replay loads pending commands from storage.
@@ -837,6 +989,81 @@ func (e *Executor) cleanupLoop() {
 	}
 }
 
+// stuckCommandRecoveryLoop periodically recovers stuck commands.
+// Stuck commands are those in STARTED status for longer than stuckThreshold,
+// which may indicate a worker crash or process restart.
+func (e *Executor) stuckCommandRecoveryLoop() {
+	ticker := time.NewTicker(e.stuckCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-ticker.C:
+			e.recoverStuckCommands()
+		}
+	}
+}
+
+// recoverStuckCommands finds and resets stuck commands.
+func (e *Executor) recoverStuckCommands() {
+	ctx := e.ctx
+
+	// Find commands in STARTED status
+	commands, err := e.storage.FindByStatus(ctx, StatusStarted)
+	if err != nil {
+		e.logger.Error("durex: failed to find started commands", "error", err)
+		return
+	}
+
+	now := time.Now()
+	recovered := 0
+
+	for _, cmd := range commands {
+		// Check if the command has been stuck for too long
+		if cmd.StartedAt == nil {
+			continue
+		}
+
+		stuckDuration := now.Sub(*cmd.StartedAt)
+		if stuckDuration < e.stuckThreshold {
+			continue
+		}
+
+		e.logger.Warn("durex: recovering stuck command",
+			"id", cmd.ID,
+			"name", cmd.Name,
+			"started_at", cmd.StartedAt,
+			"stuck_duration", stuckDuration,
+		)
+
+		// Reset to pending so it can be picked up again
+		cmd.Status = StatusPending
+		cmd.StartedAt = nil
+		// Don't increment attempt - this is recovery, not a retry
+
+		if err := e.storage.Update(ctx, cmd); err != nil {
+			e.logger.Error("durex: failed to recover stuck command",
+				"id", cmd.ID,
+				"error", err,
+			)
+			continue
+		}
+
+		// Schedule for execution (only in non-locking mode)
+		if _, ok := e.storage.(LockingStorage); !ok {
+			e.schedule(cmd)
+		}
+
+		recovered++
+	}
+
+	if recovered > 0 {
+		e.logger.Info("durex: recovered stuck commands", "count", recovered)
+	}
+}
+
 // createInstance creates a new Instance from a Spec.
 func (e *Executor) createInstance(spec Spec) (*Instance, error) {
 	// Validate
@@ -870,12 +1097,18 @@ func (e *Executor) createInstance(spec Spec) (*Instance, error) {
 		CreatedAt:     now,
 		ReadyAt:       readyAt,
 		Period:        spec.Period,
+		Timeout:       spec.Timeout,
 		Attempt:       0,
 	}
 
 	// Apply default retries if not specified
 	if instance.Retries == 0 && e.defaultRetries > 0 {
 		instance.Retries = e.defaultRetries
+	}
+
+	// Apply default timeout if not specified
+	if instance.Timeout == 0 && e.defaultTimeout > 0 {
+		instance.Timeout = e.defaultTimeout
 	}
 
 	// Set deadline
@@ -909,6 +1142,9 @@ func mergeSpecs(defaults, user Spec) Spec {
 	}
 	if user.Period != 0 {
 		result.Period = user.Period
+	}
+	if user.Timeout != 0 {
+		result.Timeout = user.Timeout
 	}
 	if user.Deadline != 0 {
 		result.Deadline = user.Deadline
