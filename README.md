@@ -738,3 +738,9 @@ Contributions welcome! Please open an issue first to discuss what you'd like to 
 ## License
 
 MIT License - see [LICENSE](LICENSE)
+
+<!-- Keywords: go golang background jobs task queue worker pool job scheduler 
+async tasks durable execution workflow engine saga pattern compensation 
+postgresql sqlite redis-free asynq alternative temporal alternative 
+river alternative machinery alternative job-queue task-runner 
+distributed-systems microservices event-driven -->

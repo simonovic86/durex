@@ -1,9 +1,11 @@
 /*
-Package durex provides a durable execution framework for Go applications.
+Package durex provides a durable background job queue and workflow engine for Go.
 
-Durex enables you to build reliable, persistent command/task execution systems
-with automatic retries, deadlines, and recovery from failures. It's inspired by
-patterns from job queues, workflow engines, and saga orchestrators.
+Durex is a lightweight, embeddable task queue with persistence, automatic retries,
+workflow sequences, and saga pattern support. It's an alternative to Asynq, River,
+and Temporal for teams who want workflow capabilities without infrastructure complexity.
+
+Use SQLite for development, PostgreSQL for production. No Redis or Kafka required.
 
 # Key Features
 
