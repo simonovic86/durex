@@ -13,12 +13,19 @@ Use SQLite for development, PostgreSQL for production. No Redis or Kafka require
   - Automatic Retries: Configurable retry logic with backoff strategies
   - Deadlines: Time-bound execution with expiration handling
   - Command Chaining: Build workflows with sequences
-  - Recovery: Custom error handling and compensation
+  - Recovery: Custom error handling and compensation (saga pattern)
   - Middleware: Extensible execution pipeline
   - Multiple Storage Backends: PostgreSQL, SQLite, Memory
   - Rate Limiting: Control concurrent execution per command type
   - Deduplication: Prevent duplicate commands with unique keys
   - Context Propagation: Trace and correlation IDs across command chains
+  - Execution History: Full audit trail of command lifecycle events
+  - Prometheus Metrics: Built-in metrics for monitoring
+  - Web Dashboard: Real-time monitoring UI with retry/cancel actions
+  - Dead Letter Queue: Preserve failed commands for inspection and replay
+  - Panic Recovery: Workers survive panics and continue processing
+  - Stuck Command Recovery: Automatic detection and recovery of stuck commands
+  - Health Endpoint: /api/health for load balancer health checks
 
 # Basic Usage
 
@@ -219,6 +226,75 @@ Enable the built-in monitoring dashboard:
 
 	// Or integrate with existing HTTP server
 	http.Handle("/durex/", http.StripPrefix("/durex", executor.DashboardHandler()))
+
+	// Or enable via option (auto-starts with executor)
+	executor := durex.New(store, durex.WithDashboard(":8080"))
+
+The dashboard provides:
+  - Live command counts (pending, completed, failed, repeating)
+  - Recent commands with status, attempts, and timing
+  - Retry and cancel actions for individual commands
+  - Health endpoint at /api/health
+
+# Execution History
+
+Every command tracks its execution history for debugging and auditing:
+
+	history, _ := executor.History(ctx, "cmd_abc123")
+	for _, event := range history {
+		fmt.Printf("%s: %s (attempt %d)\n", event.Timestamp, event.Type, event.Attempt)
+	}
+
+Event types: created, started, completed, failed, retrying, expired, cancelled, repeating, recovered.
+
+History is also available via the dashboard API: GET /api/commands/history?id=<command_id>
+
+# Prometheus Metrics
+
+Enable Prometheus metrics for monitoring:
+
+	metrics := durex.NewPrometheusMetrics(prometheus.DefaultRegisterer)
+	executor := durex.New(store, durex.WithMetrics(metrics))
+
+Exported metrics:
+  - durex_commands_started_total: Counter per command name
+  - durex_commands_completed_total: Counter per command name
+  - durex_commands_failed_total: Counter per command name
+  - durex_commands_retried_total: Counter per command name
+  - durex_command_duration_seconds: Histogram per command name
+  - durex_queue_size: Gauge for current queue size
+
+# Dead Letter Queue
+
+Enable DLQ to preserve failed commands for inspection and replay:
+
+	executor := durex.New(store, durex.WithDeadLetterQueue())
+
+	// Inspect failed commands
+	deadLettered, _ := executor.FindDeadLettered(ctx)
+
+	// Replay a command
+	executor.ReplayFromDLQ(ctx, "cmd_abc123")
+
+	// Purge old entries
+	executor.PurgeDLQ(ctx, 7*24*time.Hour)
+
+# Reliability Features
+
+Durex includes several reliability features:
+
+Panic Recovery: Workers automatically recover from panics in command handlers.
+The command is marked as failed, and workers continue processing other commands.
+
+Stuck Command Recovery: Commands stuck in STARTED status (e.g., after a crash)
+are automatically detected and reset to PENDING:
+
+	executor := durex.New(store,
+		durex.WithStuckCommandRecovery(
+			time.Minute,    // Check every minute
+			5*time.Minute,  // Reset commands stuck >5 min
+		),
+	)
 
 # Multi-Instance Deployment
 
