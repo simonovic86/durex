@@ -87,6 +87,7 @@ func (e *Executor) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 		Completed:          stats.Completed,
 		Failed:             stats.Failed,
 		DeadLetter:         stats.DeadLetter,
+		Repeating:          stats.Repeating,
 		QueueSize:          stats.QueueSize,
 		RegisteredCommands: stats.RegisteredCommands,
 		WorkerCount:        stats.WorkerCount,
@@ -347,6 +348,7 @@ type statsResponse struct {
 	Completed          int64              `json:"completed"`
 	Failed             int64              `json:"failed"`
 	DeadLetter         int64              `json:"dead_letter"`
+	Repeating          int64              `json:"repeating"`
 	QueueSize          int                `json:"queue_size"`
 	RegisteredCommands int                `json:"registered_commands"`
 	WorkerCount        int                `json:"worker_count"`

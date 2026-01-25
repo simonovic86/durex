@@ -446,11 +446,17 @@ func (e *Executor) Stats(ctx context.Context) (*Stats, error) {
 		return nil, err
 	}
 
+	repeating, err := e.storage.Count(ctx, ptr(StatusRepeating))
+	if err != nil {
+		return nil, err
+	}
+
 	stats := &Stats{
 		Pending:            pending,
 		Completed:          completed,
 		Failed:             failed,
 		DeadLetter:         deadLetter,
+		Repeating:          repeating,
 		QueueSize:          len(e.queue),
 		RegisteredCommands: e.registry.Count(),
 		WorkerCount:        e.parallelism,
@@ -470,6 +476,7 @@ type Stats struct {
 	Completed          int64
 	Failed             int64
 	DeadLetter         int64
+	Repeating          int64
 	QueueSize          int
 	RegisteredCommands int
 	WorkerCount        int

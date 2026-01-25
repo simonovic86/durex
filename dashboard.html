@@ -100,7 +100,8 @@
         .stat-card.running { border-left: 4px solid var(--accent-blue); }
         .stat-card.completed { border-left: 4px solid var(--accent-green); }
         .stat-card.failed { border-left: 4px solid var(--accent-red); }
-        .stat-card.workers { border-left: 4px solid var(--accent-purple); }
+        .stat-card.repeating { border-left: 4px solid var(--accent-purple); }
+        .stat-card.workers { border-left: 4px solid var(--accent-blue); }
         
         .stat-label {
             font-size: 0.875rem;
@@ -119,7 +120,8 @@
         .stat-card.running .stat-value { color: var(--accent-blue); }
         .stat-card.completed .stat-value { color: var(--accent-green); }
         .stat-card.failed .stat-value { color: var(--accent-red); }
-        .stat-card.workers .stat-value { color: var(--accent-purple); }
+        .stat-card.repeating .stat-value { color: var(--accent-purple); }
+        .stat-card.workers .stat-value { color: var(--accent-blue); }
         
         .section {
             background: var(--bg-secondary);
@@ -360,6 +362,10 @@
                 <div class="stat-label">Failed</div>
                 <div class="stat-value" id="failed-count">-</div>
             </div>
+            <div class="stat-card repeating" id="repeating-card" style="display: none;">
+                <div class="stat-label">Repeating</div>
+                <div class="stat-value" id="repeating-count">-</div>
+            </div>
             <div class="stat-card failed" id="dlq-card" style="display: none;">
                 <div class="stat-label">Dead Letter</div>
                 <div class="stat-value" id="dlq-count">-</div>
@@ -439,6 +445,16 @@
                 document.getElementById('completed-count').textContent = data.completed || 0;
                 document.getElementById('failed-count').textContent = data.failed || 0;
                 document.getElementById('worker-count').textContent = data.worker_count || 0;
+                
+                // Show Repeating card if there are repeating commands
+                const repeatingCount = data.repeating || 0;
+                const repeatingCard = document.getElementById('repeating-card');
+                if (repeatingCount > 0) {
+                    repeatingCard.style.display = 'block';
+                    document.getElementById('repeating-count').textContent = repeatingCount;
+                } else {
+                    repeatingCard.style.display = 'none';
+                }
                 
                 // Show DLQ card if there are dead-lettered commands
                 const dlqCount = data.dead_letter || 0;

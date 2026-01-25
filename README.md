@@ -625,6 +625,50 @@ GET /api/health
 
 Status values: `healthy`, `degraded` (shutting down), `unhealthy` (not started or storage error).
 
+### Prometheus Metrics
+
+Durex includes built-in Prometheus metrics support:
+
+```go
+import (
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// Create metrics collector
+metrics := durex.NewPrometheusMetrics(prometheus.DefaultRegisterer)
+
+// Use with executor
+executor := durex.New(store,
+    durex.WithMetrics(metrics),
+)
+
+// Expose metrics endpoint
+http.Handle("/metrics", promhttp.Handler())
+```
+
+Exported metrics:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `durex_commands_started_total` | Counter | command | Total commands started |
+| `durex_commands_completed_total` | Counter | command | Total commands completed |
+| `durex_commands_failed_total` | Counter | command | Total commands failed |
+| `durex_commands_retried_total` | Counter | command | Total command retries |
+| `durex_command_duration_seconds` | Histogram | command | Command execution duration |
+| `durex_queue_size` | Gauge | - | Current queue size |
+
+Customize namespace and buckets:
+
+```go
+metrics := durex.NewPrometheusMetrics(
+    prometheus.DefaultRegisterer,
+    durex.WithPrometheusNamespace("myapp"),
+    durex.WithPrometheusSubsystem("jobs"),
+    durex.WithPrometheusBuckets([]float64{0.01, 0.1, 0.5, 1, 5, 10}),
+)
+```
+
 ## Examples
 
 See [examples/basic](./examples/basic) and [examples/workflow](./examples/workflow) for complete working examples.
