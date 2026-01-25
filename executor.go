@@ -298,6 +298,15 @@ func (e *Executor) Get(ctx context.Context, id string) (*Instance, error) {
 	return e.storage.Get(ctx, id)
 }
 
+// History returns the execution history for a command.
+func (e *Executor) History(ctx context.Context, id string) ([]Event, error) {
+	instance, err := e.storage.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return instance.History, nil
+}
+
 // Cancel cancels a pending command.
 func (e *Executor) Cancel(ctx context.Context, id string) error {
 	instance, err := e.storage.Get(ctx, id)
@@ -312,6 +321,7 @@ func (e *Executor) Cancel(ctx context.Context, id string) error {
 	instance.Status = StatusCancelled
 	now := time.Now()
 	instance.CompletedAt = &now
+	instance.RecordEvent(EventCancelled, "")
 	return e.storage.Update(ctx, instance)
 }
 
@@ -742,6 +752,7 @@ func (e *Executor) execute(instance *Instance) error {
 	instance.Status = StatusStarted
 	instance.StartedAt = &now
 	instance.Attempt++
+	instance.RecordEvent(EventStarted, "")
 	if err := e.storage.Update(baseCtx, instance); err != nil {
 		return err
 	}
@@ -830,6 +841,7 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 			period = e.defaultRepeatInterval
 		}
 		instance.ReadyAt = now.Add(period)
+		instance.RecordEvent(EventRepeating, fmt.Sprintf("next run in %v", period))
 		if err := e.storage.Update(ctx, instance); err != nil {
 			return err
 		}
@@ -842,6 +854,7 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 		if instance.Retries > 0 {
 			instance.Retries--
 			instance.Status = StatusPending
+			instance.RecordEvent(EventRetrying, fmt.Sprintf("retries left: %d", instance.Retries))
 			if e.metrics != nil {
 				e.metrics.CommandRetried(instance.Name, instance.Attempt)
 			}
@@ -893,6 +906,7 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 	// Mark completed
 	instance.Status = StatusCompleted
 	instance.CompletedAt = &now
+	instance.RecordEvent(EventCompleted, "")
 	return e.storage.Update(ctx, instance)
 }
 
@@ -918,6 +932,8 @@ func (e *Executor) handleError(ctx context.Context, instance *Instance, handler 
 		backoffDelay := e.backoff.NextDelay(instance.Attempt)
 		instance.ReadyAt = now.Add(backoffDelay)
 
+		instance.RecordError(EventRetrying, err)
+
 		if e.metrics != nil {
 			e.metrics.CommandRetried(instance.Name, instance.Attempt)
 		}
@@ -939,8 +955,10 @@ func (e *Executor) handleError(ctx context.Context, instance *Instance, handler 
 	// Mark failed - use DLQ status if enabled
 	if e.deadLetterEnabled {
 		instance.Status = StatusDeadLetter
+		instance.RecordError(EventRecovered, err)
 	} else {
 		instance.Status = StatusFailed
+		instance.RecordError(EventFailed, err)
 	}
 	instance.Error = err.Error()
 	instance.CompletedAt = &now
@@ -990,6 +1008,7 @@ func (e *Executor) handleExpired(ctx context.Context, instance *Instance) error 
 
 	instance.Status = StatusExpired
 	instance.CompletedAt = &now
+	instance.RecordEvent(EventExpired, "deadline exceeded")
 	if err := e.storage.Update(ctx, instance); err != nil {
 		return err
 	}
@@ -1261,6 +1280,9 @@ func (e *Executor) createInstance(spec Spec) (*Instance, error) {
 		deadline := now.Add(spec.Deadline)
 		instance.DeadlineAt = &deadline
 	}
+
+	// Record creation event
+	instance.RecordEvent(EventCreated, "")
 
 	return instance, nil
 }

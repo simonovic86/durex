@@ -45,6 +45,7 @@ func (e *Executor) DashboardHandler() http.Handler {
 	mux.HandleFunc("/api/health", e.handleAPIHealth)
 	mux.HandleFunc("/api/commands/retry", e.handleAPIRetry)
 	mux.HandleFunc("/api/commands/cancel", e.handleAPICancel)
+	mux.HandleFunc("/api/commands/history", e.handleAPIHistory)
 
 	return mux
 }
@@ -328,6 +329,34 @@ func (e *Executor) handleAPICancel(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"message": "Command cancelled",
 		"id":      id,
+	})
+}
+
+// handleAPIHistory returns the execution history for a command.
+func (e *Executor) handleAPIHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "Missing 'id' parameter", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	history, err := e.History(ctx, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":      id,
+		"history": history,
 	})
 }
 

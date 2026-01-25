@@ -305,9 +305,3 @@ func (m *Memory) All() []*durex.Instance {
 	}
 	return result
 }
-
-// Ensure Memory implements the interfaces.
-var (
-	_ durex.Storage          = (*Memory)(nil)
-	_ durex.QueryableStorage = (*Memory)(nil)
-)

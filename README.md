@@ -664,6 +664,31 @@ GET /api/health
 
 Status values: `healthy`, `degraded` (shutting down), `unhealthy` (not started or storage error).
 
+### Execution History
+
+Every command automatically tracks its execution history. Query it for debugging and auditing:
+
+```go
+history, _ := executor.History(ctx, "cmd_abc123")
+for _, event := range history {
+    fmt.Printf("%s: %s (attempt %d)\n", event.Timestamp, event.Type, event.Attempt)
+}
+// Output:
+// 2024-01-15 10:30:00: created (attempt 0)
+// 2024-01-15 10:30:01: started (attempt 1)
+// 2024-01-15 10:30:02: failed (attempt 1)
+// 2024-01-15 10:30:03: started (attempt 2)
+// 2024-01-15 10:30:04: completed (attempt 2)
+```
+
+Event types: `created`, `started`, `completed`, `failed`, `retrying`, `expired`, `cancelled`, `repeating`, `recovered`
+
+The dashboard also exposes history via API:
+
+```
+GET /api/commands/history?id=cmd_abc123
+```
+
 ### Prometheus Metrics
 
 Durex includes built-in Prometheus metrics support:

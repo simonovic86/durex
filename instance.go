@@ -77,6 +77,10 @@ type Instance struct {
 
 	// Metadata stores additional runtime information.
 	Metadata M `json:"metadata,omitempty"`
+
+	// History contains the execution history of this command.
+	// Events are appended as the command progresses through its lifecycle.
+	History []Event `json:"history,omitempty"`
 }
 
 // Get retrieves a value from the command data with type assertion.
@@ -202,7 +206,47 @@ func (i *Instance) Clone() *Instance {
 		}
 	}
 
+	if i.History != nil {
+		clone.History = make([]Event, len(i.History))
+		copy(clone.History, i.History)
+	}
+
 	return &clone
+}
+
+// RecordEvent appends an event to the command's history.
+func (i *Instance) RecordEvent(eventType EventType, message string) {
+	i.History = append(i.History, Event{
+		Type:      eventType,
+		Timestamp: time.Now(),
+		Attempt:   i.Attempt,
+		Message:   message,
+	})
+}
+
+// RecordEventWithDuration appends an event with duration to the command's history.
+func (i *Instance) RecordEventWithDuration(eventType EventType, duration time.Duration, message string) {
+	i.History = append(i.History, Event{
+		Type:       eventType,
+		Timestamp:  time.Now(),
+		Attempt:    i.Attempt,
+		DurationMs: duration.Milliseconds(),
+		Message:    message,
+	})
+}
+
+// RecordError appends a failed event with error details to the command's history.
+func (i *Instance) RecordError(eventType EventType, err error) {
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	i.History = append(i.History, Event{
+		Type:      eventType,
+		Timestamp: time.Now(),
+		Attempt:   i.Attempt,
+		Error:     errMsg,
+	})
 }
 
 // MarshalJSON implements json.Marshaler.
