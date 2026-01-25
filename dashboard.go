@@ -43,6 +43,8 @@ func (e *Executor) DashboardHandler() http.Handler {
 	mux.HandleFunc("/api/stats", e.handleAPIStats)
 	mux.HandleFunc("/api/commands", e.handleAPICommands)
 	mux.HandleFunc("/api/health", e.handleAPIHealth)
+	mux.HandleFunc("/api/commands/retry", e.handleAPIRetry)
+	mux.HandleFunc("/api/commands/cancel", e.handleAPICancel)
 
 	return mux
 }
@@ -238,6 +240,94 @@ func (e *Executor) handleAPIHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(health)
+}
+
+// handleAPIRetry retries a failed or dead-lettered command.
+func (e *Executor) handleAPIRetry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "Missing 'id' parameter", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Get the command
+	instance, err := e.storage.Get(ctx, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Check if it can be retried
+	if instance.Status != StatusFailed && instance.Status != StatusDeadLetter {
+		http.Error(w, "Command cannot be retried (status: "+string(instance.Status)+")", http.StatusBadRequest)
+		return
+	}
+
+	// Reset for retry
+	instance.Status = StatusPending
+	instance.Error = ""
+	instance.StartedAt = nil
+	instance.CompletedAt = nil
+	instance.Attempt = 0
+	instance.ReadyAt = time.Now()
+
+	if err := e.storage.Update(ctx, instance); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Schedule for execution
+	e.schedule(instance)
+
+	e.logger.Info("durex: command retried via dashboard",
+		"id", instance.ID,
+		"name", instance.Name,
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"message": "Command scheduled for retry",
+		"id":      id,
+	})
+}
+
+// handleAPICancel cancels a pending or started command.
+func (e *Executor) handleAPICancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "Missing 'id' parameter", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	err := e.Cancel(ctx, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	e.logger.Info("durex: command cancelled via dashboard", "id", id)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"message": "Command cancelled",
+		"id":      id,
+	})
 }
 
 // API response types

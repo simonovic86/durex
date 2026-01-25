@@ -4,9 +4,36 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/simonovic86/durex)](https://goreportcard.com/report/github.com/simonovic86/durex)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Durable Execution Framework for Go**
+**Durable background jobs for Go — no Redis, no Kafka, just Go.**
 
-Durex enables you to build reliable, persistent command/task execution systems with automatic retries, deadlines, and recovery from failures.
+Durex is a lightweight, embeddable task queue with persistence, automatic retries, workflows, and a built-in dashboard. Use SQLite for development, PostgreSQL for production.
+
+```go
+executor := durex.New(storage.NewMemory(), durex.WithDashboard(":8080"))
+executor.HandleFunc("sendEmail", sendEmailHandler, durex.Retries(3))
+executor.Start(ctx)
+
+executor.Add(ctx, durex.Spec{Name: "sendEmail", Data: durex.M{"to": "user@example.com"}})
+```
+
+## Why Durex?
+
+| | Durex | Asynq | River | Temporal |
+|---|:---:|:---:|:---:|:---:|
+| **No external dependencies** | ✅ SQLite/Postgres | ❌ Redis | ✅ Postgres | ❌ Server cluster |
+| **Embedded dashboard** | ✅ | ❌ | ❌ | ✅ |
+| **Workflow sequences** | ✅ | ❌ | ❌ | ✅ |
+| **Saga pattern (recovery)** | ✅ | ❌ | ❌ | ✅ |
+| **Dead Letter Queue** | ✅ | ✅ | ❌ | ✅ |
+| **Multi-instance safe** | ✅ | ✅ | ✅ | ✅ |
+| **Learning curve** | Low | Low | Low | High |
+| **Setup time** | 5 min | 10 min | 10 min | 1+ hour |
+
+**Choose Durex when you want:**
+- Simple, Go-native background jobs without infrastructure overhead
+- SQLite for local development, PostgreSQL for production
+- Workflows and saga patterns without Temporal's complexity
+- An embedded dashboard with zero configuration
 
 ## Features
 

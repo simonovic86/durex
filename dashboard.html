@@ -212,7 +212,43 @@
         .status-pill.completed { background: rgba(34, 197, 94, 0.2); color: var(--accent-green); }
         .status-pill.failed { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
         .status-pill.expired { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+        .status-pill.dead_letter { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+        .status-pill.cancelled { background: rgba(148, 163, 184, 0.2); color: var(--text-secondary); }
         .status-pill.repeating { background: rgba(168, 85, 247, 0.2); color: var(--accent-purple); }
+        
+        .btn-action {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            border: none;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-right: 0.25rem;
+        }
+        
+        .btn-retry {
+            background: rgba(34, 197, 94, 0.2);
+            color: var(--accent-green);
+        }
+        
+        .btn-retry:hover {
+            background: rgba(34, 197, 94, 0.4);
+        }
+        
+        .btn-cancel {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--accent-red);
+        }
+        
+        .btn-cancel:hover {
+            background: rgba(239, 68, 68, 0.4);
+        }
+        
+        .btn-action:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
         
         .mono {
             font-family: 'SF Mono', Monaco, 'Courier New', monospace;
@@ -324,6 +360,10 @@
                 <div class="stat-label">Failed</div>
                 <div class="stat-value" id="failed-count">-</div>
             </div>
+            <div class="stat-card failed" id="dlq-card" style="display: none;">
+                <div class="stat-label">Dead Letter</div>
+                <div class="stat-value" id="dlq-count">-</div>
+            </div>
             <div class="stat-card workers">
                 <div class="stat-label">Workers</div>
                 <div class="stat-value" id="worker-count">-</div>
@@ -353,7 +393,7 @@
                         <th>Status</th>
                         <th>Attempt</th>
                         <th>Created</th>
-                        <th>Correlation</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="commands-table">
@@ -399,6 +439,16 @@
                 document.getElementById('completed-count').textContent = data.completed || 0;
                 document.getElementById('failed-count').textContent = data.failed || 0;
                 document.getElementById('worker-count').textContent = data.worker_count || 0;
+                
+                // Show DLQ card if there are dead-lettered commands
+                const dlqCount = data.dead_letter || 0;
+                const dlqCard = document.getElementById('dlq-card');
+                if (dlqCount > 0) {
+                    dlqCard.style.display = 'block';
+                    document.getElementById('dlq-count').textContent = dlqCount;
+                } else {
+                    dlqCard.style.display = 'none';
+                }
                 
                 // Rate limits
                 if (data.rate_limit && data.rate_limit.commands) {
@@ -460,11 +510,70 @@
                         <td><span class="status-pill ${cmd.status.toLowerCase()}">${cmd.status}</span></td>
                         <td>${cmd.attempt || 0}</td>
                         <td class="time-ago">${formatTimeAgo(cmd.created_at)}</td>
-                        <td class="mono">${truncateId(cmd.correlation_id) || '-'}</td>
+                        <td>${renderActions(cmd)}</td>
                     </tr>
                 `).join('');
             } catch (err) {
                 console.error('Failed to fetch commands:', err);
+            }
+        }
+        
+        function renderActions(cmd) {
+            const status = cmd.status.toUpperCase();
+            let actions = [];
+            
+            // Retry button for failed or dead-lettered commands
+            if (status === 'FAILED' || status === 'DEAD_LETTER') {
+                actions.push(`<button class="btn-action btn-retry" onclick="retryCommand('${cmd.id}')" title="Retry">↻ Retry</button>`);
+            }
+            
+            // Cancel button for pending or started commands
+            if (status === 'PENDING' || status === 'STARTED' || status === 'REPEATING') {
+                actions.push(`<button class="btn-action btn-cancel" onclick="cancelCommand('${cmd.id}')" title="Cancel">✕ Cancel</button>`);
+            }
+            
+            return actions.length > 0 ? actions.join('') : '<span class="mono">-</span>';
+        }
+        
+        async function retryCommand(id) {
+            if (!confirm('Retry this command?')) return;
+            
+            try {
+                const res = await fetch(API_BASE + '/commands/retry?id=' + encodeURIComponent(id), {
+                    method: 'POST'
+                });
+                
+                if (!res.ok) {
+                    const text = await res.text();
+                    alert('Failed to retry: ' + text);
+                    return;
+                }
+                
+                fetchCommands();
+                fetchStats();
+            } catch (err) {
+                alert('Failed to retry: ' + err.message);
+            }
+        }
+        
+        async function cancelCommand(id) {
+            if (!confirm('Cancel this command?')) return;
+            
+            try {
+                const res = await fetch(API_BASE + '/commands/cancel?id=' + encodeURIComponent(id), {
+                    method: 'POST'
+                });
+                
+                if (!res.ok) {
+                    const text = await res.text();
+                    alert('Failed to cancel: ' + text);
+                    return;
+                }
+                
+                fetchCommands();
+                fetchStats();
+            } catch (err) {
+                alert('Failed to cancel: ' + err.message);
             }
         }
         
