@@ -4,9 +4,22 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/simonovic86/durex)](https://goreportcard.com/report/github.com/simonovic86/durex)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Durable background jobs for Go — no Redis, no Kafka, just Go.**
+**Temporal for the rest of us. Durable background jobs for Go — no Redis, no Kafka, just Go.**
 
-Durex is a lightweight, embeddable task queue with persistence, automatic retries, workflows, and a built-in dashboard. Use SQLite for development, PostgreSQL for production.
+Durex is a lightweight, embeddable task queue with persistence, automatic retries, workflows, and a built-in dashboard. Start with SQLite, scale with PostgreSQL.
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Your App   │────▶│   Durex     │────▶│  SQLite or  │
+│             │     │  Executor   │     │  PostgreSQL │
+└─────────────┘     └──────┬──────┘     └─────────────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+         ┌────────┐   ┌────────┐   ┌────────┐
+         │Worker 1│   │Worker 2│   │Worker N│
+         └────────┘   └────────┘   └────────┘
+```
 
 ```go
 executor := durex.New(storage.NewMemory(), durex.WithDashboard(":8080"))
@@ -18,43 +31,69 @@ executor.Add(ctx, durex.Spec{Name: "sendEmail", Data: durex.M{"to": "user@exampl
 
 ## Why Durex?
 
+Most teams face a choice: simple queues (Asynq, River) that lack workflows, or Temporal which is powerful but complex. Durex gives you **80% of Temporal's features with 20% of the complexity**.
+
 | | Durex | Asynq | River | Temporal |
 |---|:---:|:---:|:---:|:---:|
-| **No external dependencies** | ✅ SQLite/Postgres | ❌ Redis | ✅ Postgres | ❌ Server cluster |
-| **Embedded dashboard** | ✅ | ❌ | ❌ | ✅ |
+| **Zero infrastructure** | ✅ SQLite/Postgres | ❌ Redis | ✅ Postgres | ❌ Server cluster |
+| **Embedded dashboard** | ✅ Built-in | ❌ Separate | ❌ Separate | ✅ Built-in |
 | **Workflow sequences** | ✅ | ❌ | ❌ | ✅ |
-| **Saga pattern (recovery)** | ✅ | ❌ | ❌ | ✅ |
+| **Saga pattern** | ✅ | ❌ | ❌ | ✅ |
 | **Dead Letter Queue** | ✅ | ✅ | ❌ | ✅ |
+| **Prometheus metrics** | ✅ | ✅ | ✅ | ✅ |
 | **Multi-instance safe** | ✅ | ✅ | ✅ | ✅ |
 | **Learning curve** | Low | Low | Low | High |
-| **Setup time** | 5 min | 10 min | 10 min | 1+ hour |
+| **Time to first job** | 5 min | 15 min | 15 min | 1+ hour |
 
-**Choose Durex when you want:**
-- Simple, Go-native background jobs without infrastructure overhead
-- SQLite for local development, PostgreSQL for production
-- Workflows and saga patterns without Temporal's complexity
-- An embedded dashboard with zero configuration
+### Choose Durex when you need:
+
+- **Workflows without complexity** — Sequences, sagas, fan-out/fan-in without learning a new paradigm
+- **Zero infrastructure** — No Redis/Kafka to deploy; SQLite for dev, Postgres for prod
+- **Embeddable library** — Ships as a Go package, not a separate service
+- **Built-in observability** — Dashboard, health checks, Prometheus metrics out of the box
+
+### When to consider alternatives:
+
+- **Need Redis** → Use [Asynq](https://github.com/hibiken/asynq) (mature, battle-tested)
+- **Already on Postgres, want simple** → Use [River](https://github.com/riverqueue/river) (newer, focused)
+- **Complex long-running workflows** → Use [Temporal](https://temporal.io) (more powerful, more complex)
+- **Need cron scheduling** → Durex doesn't have cron expressions yet (coming soon)
 
 ## Features
 
-- 🔄 **Persistent Commands** - Commands survive process restarts
-- 🔁 **Automatic Retries** - Configurable retry logic with backoff strategies
-- ⏰ **Deadlines** - Time-bound execution with expiration handlers
-- 🔗 **Workflows** - Chain commands together with sequences
-- 🛡️ **Recovery** - Custom error handling and compensation (saga pattern)
-- 🎯 **Type Safety** - Generic typed commands with `HandleTyped[T]`
-- 💾 **Multiple Backends** - PostgreSQL, SQLite, In-Memory
-- 🚦 **Rate Limiting** - Control concurrent execution per command type
-- 🔑 **Deduplication** - Prevent duplicate commands with unique keys
-- 🔍 **Tracing** - Trace and correlation IDs across command chains
-- 🔒 **Multi-Instance Safe** - Row-level locking for horizontal scaling
-- 📊 **Web Dashboard** - Built-in real-time monitoring UI
-- ⏱️ **Execution Timeouts** - Per-command timeout with context cancellation
-- 🛡️ **Panic Recovery** - Workers survive panics and mark commands as failed
-- 🔧 **Stuck Command Recovery** - Automatic detection and recovery of stuck commands
-- 📬 **Dead Letter Queue** - Failed commands moved to DLQ for inspection and replay
-- ❌ **Command Cancellation** - Cancel pending commands by ID or tag
-- 🏥 **Health Endpoint** - `/api/health` for load balancer health checks
+### Core
+| Feature | Description |
+|---------|-------------|
+| **Persistent Jobs** | Commands survive restarts — pick up where you left off |
+| **Automatic Retries** | Exponential backoff, jitter, configurable per command |
+| **Workflows** | Chain commands with `Sequence`, pass data between steps |
+| **Saga Pattern** | Compensation handlers for failed workflows (`OnRecover`) |
+| **Type Safety** | Generic typed handlers with `HandleTyped[T]` |
+
+### Reliability
+| Feature | Description |
+|---------|-------------|
+| **Multi-Instance Safe** | PostgreSQL row-level locking (`FOR UPDATE SKIP LOCKED`) |
+| **Panic Recovery** | Workers survive panics, commands marked as failed |
+| **Stuck Command Recovery** | Auto-detect and retry commands stuck in `STARTED` |
+| **Dead Letter Queue** | Inspect and replay failed commands |
+| **Execution Timeouts** | Cancel long-running handlers with context |
+
+### Observability
+| Feature | Description |
+|---------|-------------|
+| **Web Dashboard** | Built-in UI with retry/cancel actions |
+| **Prometheus Metrics** | Counters, histograms, gauges for all operations |
+| **Health Endpoint** | `/api/health` for load balancers |
+| **Tracing** | Trace and correlation IDs across command chains |
+
+### Control
+| Feature | Description |
+|---------|-------------|
+| **Rate Limiting** | Per-command and global concurrency limits |
+| **Deduplication** | Unique keys prevent duplicate jobs |
+| **Deadlines** | Time-bound execution with expiration handlers |
+| **Cancellation** | Cancel by ID or tag |
 
 ## Architecture
 
@@ -669,21 +708,32 @@ metrics := durex.NewPrometheusMetrics(
 )
 ```
 
-## Examples
-
-See [examples/basic](./examples/basic) and [examples/workflow](./examples/workflow) for complete working examples.
+## Try It (30 seconds)
 
 ```bash
-# Run basic example
-go run ./examples/basic
+# Clone and run
+git clone https://github.com/simonovic86/durex.git
+cd durex/examples/basic
+go run main.go
 
-# Run e-commerce workflow example  
-go run ./examples/workflow
+# Open http://localhost:8080 to see the dashboard
 ```
+
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [examples/basic](./examples/basic) | Simple jobs, retries, repeating tasks, dashboard |
+| [examples/workflow](./examples/workflow) | E-commerce order flow with sequences and saga |
 
 ## Documentation
 
-- **[Workflows & Chaining Guide](./docs/WORKFLOWS.md)** - Deep dive into command chaining, sequences, fan-out/fan-in, saga pattern, and best practices
+- **[Workflows & Chaining Guide](./docs/WORKFLOWS.md)** — Sequences, fan-out/fan-in, saga pattern, best practices
+- **[GoDoc Reference](https://pkg.go.dev/github.com/simonovic86/durex)** — Complete API documentation
+
+## Contributing
+
+Contributions welcome! Please open an issue first to discuss what you'd like to change.
 
 ## License
 
