@@ -9,6 +9,12 @@ import (
 	"github.com/simonovic86/durex"
 )
 
+// Compile-time interface assertions.
+var (
+	_ durex.Storage          = (*Memory)(nil)
+	_ durex.QueryableStorage = (*Memory)(nil)
+)
+
 // Memory is an in-memory storage implementation.
 // Useful for testing and development.
 // Not recommended for production as data is lost on restart.

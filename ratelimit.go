@@ -9,11 +9,11 @@ import (
 // RateLimiter controls concurrent execution of commands.
 type RateLimiter struct {
 	mu       sync.Mutex
-	limits   map[string]int           // command name -> max concurrent
-	current  map[string]int           // command name -> current count
+	limits   map[string]int             // command name -> max concurrent
+	current  map[string]int             // command name -> current count
 	waiters  map[string][]chan struct{} // command name -> waiting goroutines
-	global   int                      // global max concurrent (0 = unlimited)
-	globalCt int                      // global current count
+	global   int                        // global max concurrent (0 = unlimited)
+	globalCt int                        // global current count
 }
 
 // NewRateLimiter creates a new rate limiter.
@@ -191,9 +191,9 @@ func (r *RateLimiter) Stats() RateLimitStats {
 
 	for name, limit := range r.limits {
 		stats.Commands[name] = CommandRateStats{
-			Limit:    limit,
-			Current:  r.current[name],
-			Waiting:  len(r.waiters[name]),
+			Limit:   limit,
+			Current: r.current[name],
+			Waiting: len(r.waiters[name]),
 		}
 	}
 

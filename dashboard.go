@@ -356,8 +356,8 @@ type statsResponse struct {
 }
 
 type rateLimitResponse struct {
-	GlobalLimit   int                                  `json:"global_limit"`
-	GlobalCurrent int                                  `json:"global_current"`
+	GlobalLimit   int                                 `json:"global_limit"`
+	GlobalCurrent int                                 `json:"global_current"`
 	Commands      map[string]commandRateLimitResponse `json:"commands"`
 }
 

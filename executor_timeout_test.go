@@ -14,8 +14,8 @@ import (
 // TimeoutTestCommand is a test command for timeout tests.
 type TimeoutTestCommand struct {
 	durex.BaseCommand
-	name       string
-	executeFn  func(ctx context.Context, cmd *durex.Instance) (durex.Result, error)
+	name      string
+	executeFn func(ctx context.Context, cmd *durex.Instance) (durex.Result, error)
 }
 
 func (c *TimeoutTestCommand) Name() string { return c.name }

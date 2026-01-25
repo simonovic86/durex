@@ -12,6 +12,9 @@ import (
 	"github.com/simonovic86/durex"
 )
 
+// Compile-time interface assertions.
+var _ durex.Storage = (*SQLite)(nil)
+
 // SQLite is a SQLite storage implementation.
 // Good for single-instance deployments and development.
 type SQLite struct {

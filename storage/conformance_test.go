@@ -743,10 +743,10 @@ func testMetadataPersistence(t *testing.T, store durex.Storage) {
 	ctx := context.Background()
 
 	cmd := &durex.Instance{
-		ID:       durex.GenerateID(),
-		Name:     "metaTest",
-		Status:   durex.StatusPending,
-		Metadata: durex.M{"worker": "worker-1", "host": "localhost"},
+		ID:        durex.GenerateID(),
+		Name:      "metaTest",
+		Status:    durex.StatusPending,
+		Metadata:  durex.M{"worker": "worker-1", "host": "localhost"},
 		CreatedAt: time.Now(),
 		ReadyAt:   time.Now(),
 	}

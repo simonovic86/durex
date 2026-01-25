@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simonovic86/durex"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/simonovic86/durex"
 )
 
 func TestPrometheusMetrics(t *testing.T) {

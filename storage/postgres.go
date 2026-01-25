@@ -12,6 +12,13 @@ import (
 	"github.com/simonovic86/durex"
 )
 
+// Compile-time interface assertions.
+var (
+	_ durex.Storage          = (*Postgres)(nil)
+	_ durex.QueryableStorage = (*Postgres)(nil)
+	_ durex.LockingStorage   = (*Postgres)(nil)
+)
+
 // Postgres is a PostgreSQL storage implementation.
 type Postgres struct {
 	db        *sql.DB
