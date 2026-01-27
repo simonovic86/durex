@@ -1,0 +1,16 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  exclusions:
+    rules:
+      # Disable errcheck for test files - examples intentionally ignore errors for brevity
+      - path: _test\.go
+        linters:
+          - errcheck

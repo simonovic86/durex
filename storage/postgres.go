@@ -297,7 +297,7 @@ func (p *Postgres) ClaimPending(ctx context.Context, limit int) ([]*durex.Instan
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Select and lock rows atomically
 	// FOR UPDATE SKIP LOCKED ensures we don't block on locked rows
@@ -510,7 +510,6 @@ func (p *Postgres) Find(ctx context.Context, query durex.Query) ([]*durex.Instan
 	if query.CreatedBefore != nil {
 		conditions = append(conditions, fmt.Sprintf("created_at < $%d", argNum))
 		args = append(args, *query.CreatedBefore)
-		argNum++
 	}
 
 	whereClause := ""

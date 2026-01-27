@@ -171,7 +171,7 @@ func Typed[T any](name string, data T) Spec {
 	// Convert struct to map
 	jsonBytes, _ := json.Marshal(data)
 	var m M
-	json.Unmarshal(jsonBytes, &m)
+	_ = json.Unmarshal(jsonBytes, &m)
 
 	return Spec{
 		Name: name,

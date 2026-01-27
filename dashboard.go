@@ -36,7 +36,7 @@ func (e *Executor) DashboardHandler() http.Handler {
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(data)
+		_, _ = w.Write(data)
 	})
 
 	// API endpoints
@@ -101,16 +101,12 @@ func (e *Executor) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 			Commands:      make(map[string]commandRateLimitResponse),
 		}
 		for name, cmd := range stats.RateLimit.Commands {
-			response.RateLimit.Commands[name] = commandRateLimitResponse{
-				Limit:   cmd.Limit,
-				Current: cmd.Current,
-				Waiting: cmd.Waiting,
-			}
+			response.RateLimit.Commands[name] = commandRateLimitResponse(cmd)
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // handleAPICommands returns recent commands as JSON.
@@ -185,7 +181,7 @@ func (e *Executor) handleAPICommands(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // handleAPIHealth returns executor health status for load balancers.
@@ -211,7 +207,7 @@ func (e *Executor) handleAPIHealth(w http.ResponseWriter, r *http.Request) {
 		health.Message = "executor not started"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(health)
+		_ = json.NewEncoder(w).Encode(health)
 		return
 	}
 
@@ -221,7 +217,7 @@ func (e *Executor) handleAPIHealth(w http.ResponseWriter, r *http.Request) {
 		health.Message = "executor is shutting down"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(health)
+		_ = json.NewEncoder(w).Encode(health)
 		return
 	}
 
@@ -233,7 +229,7 @@ func (e *Executor) handleAPIHealth(w http.ResponseWriter, r *http.Request) {
 		health.Message = "storage error: " + err.Error()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(health)
+		_ = json.NewEncoder(w).Encode(health)
 		return
 	}
 	health.StorageOK = true
@@ -242,7 +238,7 @@ func (e *Executor) handleAPIHealth(w http.ResponseWriter, r *http.Request) {
 	health.QueueDepth = len(e.queue)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(health)
+	_ = json.NewEncoder(w).Encode(health)
 }
 
 // handleAPIRetry retries a failed or dead-lettered command.

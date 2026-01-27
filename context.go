@@ -98,12 +98,8 @@ func (DefaultContextInjector) InjectContext(ctx context.Context, traceID, correl
 
 // TracingMiddleware creates middleware that propagates trace and correlation IDs.
 // It injects the instance's trace/correlation IDs into the context before execution.
-func TracingMiddleware(injector ContextInjector) Middleware {
-	if injector == nil {
-		injector = DefaultContextInjector{}
-	}
-
-	return func(mwCtx MiddlewareContext, next func() (Result, error)) (Result, error) {
+func TracingMiddleware(_ ContextInjector) Middleware {
+	return func(_ MiddlewareContext, next func() (Result, error)) (Result, error) {
 		// The context enrichment happens via the instance itself
 		// Commands can access TraceID and CorrelationID from the instance
 		return next()

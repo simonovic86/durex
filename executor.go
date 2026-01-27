@@ -62,7 +62,6 @@ type Executor struct {
 	cancel   context.CancelFunc
 	started  atomic.Bool
 	stopping atomic.Bool
-	mu       sync.RWMutex
 
 	// Timer tracking for delayed commands
 	delayedTimers   map[string]*time.Timer
