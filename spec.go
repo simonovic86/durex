@@ -22,7 +22,18 @@ type Spec struct {
 	// Period sets the interval for repeating commands.
 	// When a command returns Repeat(), it will be rescheduled after this duration.
 	// If not set, defaults to executor's DefaultRepeatInterval.
+	// Note: If Cron is set, it takes precedence over Period.
 	Period time.Duration `json:"period,omitempty"`
+
+	// Cron sets a cron expression for scheduled commands.
+	// When a command returns Repeat(), it will be rescheduled based on this expression.
+	// Uses standard cron format: "minute hour day-of-month month day-of-week"
+	// Examples:
+	//   - "0 0 * * *"     - Daily at midnight
+	//   - "*/15 * * * *"  - Every 15 minutes
+	//   - "0 9 * * 1-5"   - Weekdays at 9 AM
+	// If both Cron and Period are set, Cron takes precedence.
+	Cron string `json:"cron,omitempty"`
 
 	// Timeout sets the maximum execution time per attempt.
 	// If the handler doesn't complete within this duration, the context is cancelled

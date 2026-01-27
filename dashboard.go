@@ -180,6 +180,7 @@ func (e *Executor) handleAPICommands(w http.ResponseWriter, r *http.Request) {
 			CorrelationID: cmd.CorrelationID,
 			Error:         cmd.Error,
 			Tags:          cmd.Tags,
+			Cron:          cmd.Cron,
 		}
 	}
 
@@ -417,6 +418,7 @@ type commandResponse struct {
 	CorrelationID string     `json:"correlation_id,omitempty"`
 	Error         string     `json:"error,omitempty"`
 	Tags          []string   `json:"tags,omitempty"`
+	Cron          string     `json:"cron,omitempty"`
 }
 
 // Ensure context is used

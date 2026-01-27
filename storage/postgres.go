@@ -72,6 +72,7 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 			completed_at TIMESTAMPTZ,
 			deadline_at TIMESTAMPTZ,
 			period_ns BIGINT NOT NULL DEFAULT 0,
+			cron TEXT,
 			error TEXT,
 			attempt INTEGER NOT NULL DEFAULT 0,
 			metadata JSONB
@@ -121,9 +122,9 @@ func (p *Postgres) Create(ctx context.Context, cmd *durex.Instance) error {
 		INSERT INTO %s (
 			id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
 		)
 	`, p.tableName)
 
@@ -146,6 +147,7 @@ func (p *Postgres) Create(ctx context.Context, cmd *durex.Instance) error {
 		cmd.CompletedAt,
 		cmd.DeadlineAt,
 		int64(cmd.Period),
+		nullStr(cmd.Cron),
 		cmd.Error,
 		cmd.Attempt,
 		metadata,
@@ -202,9 +204,10 @@ func (p *Postgres) Update(ctx context.Context, cmd *durex.Instance) error {
 			completed_at = $15,
 			deadline_at = $16,
 			period_ns = $17,
-			error = $18,
-			attempt = $19,
-			metadata = $20
+			cron = $18,
+			error = $19,
+			attempt = $20,
+			metadata = $21
 		WHERE id = $1
 	`, p.tableName)
 
@@ -226,6 +229,7 @@ func (p *Postgres) Update(ctx context.Context, cmd *durex.Instance) error {
 		cmd.CompletedAt,
 		cmd.DeadlineAt,
 		int64(cmd.Period),
+		nullStr(cmd.Cron),
 		cmd.Error,
 		cmd.Attempt,
 		metadata,
@@ -259,7 +263,7 @@ func (p *Postgres) Get(ctx context.Context, id string) (*durex.Instance, error) 
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s WHERE id = $1
 	`, p.tableName)
 
@@ -272,7 +276,7 @@ func (p *Postgres) FindPending(ctx context.Context) ([]*durex.Instance, error) {
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE status IN ('PENDING', 'STARTED', 'REPEATING')
 		ORDER BY priority DESC, ready_at ASC
@@ -300,7 +304,7 @@ func (p *Postgres) ClaimPending(ctx context.Context, limit int) ([]*durex.Instan
 	selectQuery := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE status IN ('PENDING', 'REPEATING')
 		  AND ready_at <= NOW()
@@ -381,7 +385,7 @@ func (p *Postgres) FindByStatus(ctx context.Context, status durex.Status) ([]*du
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE status = $1
 		ORDER BY created_at DESC
@@ -395,7 +399,7 @@ func (p *Postgres) FindByParent(ctx context.Context, parentID string) ([]*durex.
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE parent_id = $1
 		ORDER BY created_at ASC
@@ -409,7 +413,7 @@ func (p *Postgres) FindByUniqueKey(ctx context.Context, key string) (*durex.Inst
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE unique_key = $1 AND status IN ('PENDING', 'STARTED', 'REPEATING')
 		LIMIT 1
@@ -424,7 +428,7 @@ func (p *Postgres) FindByCorrelationID(ctx context.Context, correlationID string
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE correlation_id = $1
 		ORDER BY created_at ASC
@@ -536,7 +540,7 @@ func (p *Postgres) Find(ctx context.Context, query durex.Query) ([]*durex.Instan
 	sqlQuery := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		%s
 		ORDER BY %s %s
@@ -586,6 +590,7 @@ func (p *Postgres) scanInstance(row *sql.Row) (*durex.Instance, error) {
 		tags          []byte
 		metadata      []byte
 		periodNs      int64
+		cronExpr      sql.NullString
 		parentID      sql.NullString
 		uniqueKey     sql.NullString
 		traceID       sql.NullString
@@ -615,6 +620,7 @@ func (p *Postgres) scanInstance(row *sql.Row) (*durex.Instance, error) {
 		&completedAt,
 		&deadlineAt,
 		&periodNs,
+		&cronExpr,
 		&errMsg,
 		&cmd.Attempt,
 		&metadata,
@@ -667,6 +673,9 @@ func (p *Postgres) scanInstance(row *sql.Row) (*durex.Instance, error) {
 	if errMsg.Valid {
 		cmd.Error = errMsg.String
 	}
+	if cronExpr.Valid {
+		cmd.Cron = cronExpr.String
+	}
 
 	cmd.Period = time.Duration(periodNs)
 
@@ -681,6 +690,7 @@ func (p *Postgres) scanInstanceFromRows(rows *sql.Rows) (*durex.Instance, error)
 		tags          []byte
 		metadata      []byte
 		periodNs      int64
+		cronExpr      sql.NullString
 		parentID      sql.NullString
 		uniqueKey     sql.NullString
 		traceID       sql.NullString
@@ -710,6 +720,7 @@ func (p *Postgres) scanInstanceFromRows(rows *sql.Rows) (*durex.Instance, error)
 		&completedAt,
 		&deadlineAt,
 		&periodNs,
+		&cronExpr,
 		&errMsg,
 		&cmd.Attempt,
 		&metadata,
@@ -767,6 +778,9 @@ func (p *Postgres) scanInstanceFromRows(rows *sql.Rows) (*durex.Instance, error)
 	if errMsg.Valid {
 		cmd.Error = errMsg.String
 	}
+	if cronExpr.Valid {
+		cmd.Cron = cronExpr.String
+	}
 
 	cmd.Period = time.Duration(periodNs)
 
@@ -800,9 +814,9 @@ func (t *postgresTx) Create(ctx context.Context, cmd *durex.Instance) error {
 		INSERT INTO %s (
 			id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
 		)
 	`, t.tableName)
 
@@ -812,7 +826,7 @@ func (t *postgresTx) Create(ctx context.Context, cmd *durex.Instance) error {
 		nullStr(cmd.TraceID), nullStr(cmd.CorrelationID),
 		cmd.CreatedAt, cmd.ReadyAt,
 		cmd.StartedAt, cmd.CompletedAt, cmd.DeadlineAt,
-		int64(cmd.Period), cmd.Error, cmd.Attempt, metadata,
+		int64(cmd.Period), nullStr(cmd.Cron), cmd.Error, cmd.Attempt, metadata,
 	)
 	return err
 }
@@ -830,7 +844,7 @@ func (t *postgresTx) Update(ctx context.Context, cmd *durex.Instance) error {
 			parent_id = $7, priority = $8, tags = $9, unique_key = $10,
 			trace_id = $11, correlation_id = $12, ready_at = $13,
 			started_at = $14, completed_at = $15, deadline_at = $16,
-			period_ns = $17, error = $18, attempt = $19, metadata = $20
+			period_ns = $17, cron = $18, error = $19, attempt = $20, metadata = $21
 		WHERE id = $1
 	`, t.tableName)
 
@@ -839,7 +853,7 @@ func (t *postgresTx) Update(ctx context.Context, cmd *durex.Instance) error {
 		cmd.ParentID, cmd.Priority, tags, nullStr(cmd.UniqueKey),
 		nullStr(cmd.TraceID), nullStr(cmd.CorrelationID), cmd.ReadyAt,
 		cmd.StartedAt, cmd.CompletedAt, cmd.DeadlineAt,
-		int64(cmd.Period), cmd.Error, cmd.Attempt, metadata,
+		int64(cmd.Period), nullStr(cmd.Cron), cmd.Error, cmd.Attempt, metadata,
 	)
 	return err
 }

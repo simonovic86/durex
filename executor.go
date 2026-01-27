@@ -836,12 +836,39 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 	// Handle repeat
 	if result.Repeat {
 		instance.Status = StatusRepeating
-		period := instance.Period
-		if period == 0 {
-			period = e.defaultRepeatInterval
+
+		// Calculate next run time: cron expression takes precedence over period
+		var nextRun time.Time
+		var scheduleInfo string
+
+		if instance.Cron != "" {
+			nextRun = NextCronTime(instance.Cron, now)
+			if nextRun.IsZero() {
+				// Invalid cron expression, fall back to period
+				period := instance.Period
+				if period == 0 {
+					period = e.defaultRepeatInterval
+				}
+				nextRun = now.Add(period)
+				scheduleInfo = fmt.Sprintf("next run in %v (cron fallback)", period)
+				e.logger.Warn("durex: invalid cron expression, using period",
+					"id", instance.ID,
+					"cron", instance.Cron,
+				)
+			} else {
+				scheduleInfo = fmt.Sprintf("next run at %s (cron: %s)", nextRun.Format(time.RFC3339), instance.Cron)
+			}
+		} else {
+			period := instance.Period
+			if period == 0 {
+				period = e.defaultRepeatInterval
+			}
+			nextRun = now.Add(period)
+			scheduleInfo = fmt.Sprintf("next run in %v", period)
 		}
-		instance.ReadyAt = now.Add(period)
-		instance.RecordEvent(EventRepeating, fmt.Sprintf("next run in %v", period))
+
+		instance.ReadyAt = nextRun
+		instance.RecordEvent(EventRepeating, scheduleInfo)
 		if err := e.storage.Update(ctx, instance); err != nil {
 			return err
 		}
@@ -1259,6 +1286,7 @@ func (e *Executor) createInstance(spec Spec) (*Instance, error) {
 		CreatedAt:     now,
 		ReadyAt:       readyAt,
 		Period:        spec.Period,
+		Cron:          spec.Cron,
 		Timeout:       spec.Timeout,
 		Attempt:       0,
 	}
@@ -1307,6 +1335,9 @@ func mergeSpecs(defaults, user Spec) Spec {
 	}
 	if user.Period != 0 {
 		result.Period = user.Period
+	}
+	if user.Cron != "" {
+		result.Cron = user.Cron
 	}
 	if user.Timeout != 0 {
 		result.Timeout = user.Timeout

@@ -37,6 +37,7 @@ Most teams face a choice: simple queues (Asynq, River) that lack workflows, or T
 |---|:---:|:---:|:---:|:---:|
 | **Zero infrastructure** | ✅ SQLite/Postgres | ❌ Redis | ✅ Postgres | ❌ Server cluster |
 | **Embedded dashboard** | ✅ Built-in | ❌ Separate | ❌ Separate | ✅ Built-in |
+| **Cron scheduling** | ✅ | ✅ | ✅ | ✅ |
 | **Workflow sequences** | ✅ | ❌ | ❌ | ✅ |
 | **Saga pattern** | ✅ | ❌ | ❌ | ✅ |
 | **Dead Letter Queue** | ✅ | ✅ | ❌ | ✅ |
@@ -57,7 +58,6 @@ Most teams face a choice: simple queues (Asynq, River) that lack workflows, or T
 - **Need Redis** → Use [Asynq](https://github.com/hibiken/asynq) (mature, battle-tested)
 - **Already on Postgres, want simple** → Use [River](https://github.com/riverqueue/river) (newer, focused)
 - **Complex long-running workflows** → Use [Temporal](https://temporal.io) (more powerful, more complex)
-- **Need cron scheduling** → Durex doesn't have cron expressions yet (coming soon)
 
 ## Features
 
@@ -66,6 +66,7 @@ Most teams face a choice: simple queues (Asynq, River) that lack workflows, or T
 |---------|-------------|
 | **Persistent Jobs** | Commands survive restarts — pick up where you left off |
 | **Automatic Retries** | Exponential backoff, jitter, configurable per command |
+| **Cron Scheduling** | Standard cron expressions for precise scheduled execution |
 | **Workflows** | Chain commands with `Sequence`, pass data between steps |
 | **Saga Pattern** | Compensation handlers for failed workflows (`OnRecover`) |
 | **Type Safety** | Generic typed handlers with `HandleTyped[T]` |
@@ -286,7 +287,57 @@ executor.Add(ctx, durex.Spec{
 })
 ```
 
-## Repeating Commands (Cron-like)
+## Cron Scheduling
+
+Schedule commands using cron expressions for precise timing control:
+
+```go
+// Daily at midnight
+executor.HandleFunc("dailyReport", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    generateDailyReport()
+    return durex.Repeat(), nil  // Reschedule based on cron
+}, durex.Cron("0 0 * * *"))
+
+// Every 15 minutes
+executor.HandleFunc("healthCheck", healthCheckFn, durex.Cron("*/15 * * * *"))
+
+// Weekdays at 9 AM
+executor.HandleFunc("morningDigest", digestFn, durex.Cron("0 9 * * 1-5"))
+
+// Add a cron job
+executor.Add(ctx, durex.Spec{
+    Name: "dailyReport",
+    Cron: "0 0 * * *",
+})
+```
+
+### Cron Expression Format
+
+```
+┌───────────── minute (0-59)
+│ ┌───────────── hour (0-23)
+│ │ ┌───────────── day of month (1-31)
+│ │ │ ┌───────────── month (1-12)
+│ │ │ │ ┌───────────── day of week (0-6, Sunday=0)
+│ │ │ │ │
+* * * * *
+```
+
+### Predefined Schedules
+
+```go
+durex.CronEveryMinute   // "* * * * *"
+durex.CronEvery5Minutes // "*/5 * * * *"
+durex.CronHourly        // "0 * * * *"
+durex.CronDaily         // "0 0 * * *"
+durex.CronWeekly        // "0 0 * * 0"
+durex.CronMonthly       // "0 0 1 * *"
+durex.CronWeekdays      // "0 0 * * 1-5"
+```
+
+## Repeating Commands (Interval-based)
+
+For simple interval-based repeating (not tied to specific times):
 
 ```go
 executor.HandleFunc("cleanup", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
@@ -294,6 +345,8 @@ executor.HandleFunc("cleanup", func(ctx context.Context, cmd *durex.Instance) (d
     return durex.Repeat(), nil  // Run again after period
 }, durex.Period(time.Hour))
 ```
+
+> **Note**: If both `Cron` and `Period` are set, `Cron` takes precedence.
 
 ## Error Recovery (Saga Pattern)
 

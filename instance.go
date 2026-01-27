@@ -69,6 +69,10 @@ type Instance struct {
 	// Period is the repeat interval for recurring commands.
 	Period time.Duration `json:"period,omitempty"`
 
+	// Cron is the cron expression for scheduled commands.
+	// Uses standard cron format: "minute hour day-of-month month day-of-week"
+	Cron string `json:"cron,omitempty"`
+
 	// Error contains the error message if the command failed.
 	Error string `json:"error,omitempty"`
 

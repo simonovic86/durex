@@ -86,6 +86,7 @@ func (s *SQLite) Migrate(ctx context.Context) error {
 			completed_at TEXT,
 			deadline_at TEXT,
 			period_ns INTEGER NOT NULL DEFAULT 0,
+			cron TEXT,
 			error TEXT,
 			attempt INTEGER NOT NULL DEFAULT 0,
 			metadata TEXT,
@@ -121,9 +122,9 @@ func (s *SQLite) Create(ctx context.Context, cmd *durex.Instance) error {
 		INSERT INTO %s (
 			id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)
 	`, s.tableName)
 
@@ -146,6 +147,7 @@ func (s *SQLite) Create(ctx context.Context, cmd *durex.Instance) error {
 		nullTimeStr(cmd.CompletedAt),
 		nullTimeStr(cmd.DeadlineAt),
 		int64(cmd.Period),
+		nullStr(cmd.Cron),
 		nullStr(cmd.Error),
 		cmd.Attempt,
 		string(metadata),
@@ -186,6 +188,7 @@ func (s *SQLite) Update(ctx context.Context, cmd *durex.Instance) error {
 			completed_at = ?,
 			deadline_at = ?,
 			period_ns = ?,
+			cron = ?,
 			error = ?,
 			attempt = ?,
 			metadata = ?
@@ -209,6 +212,7 @@ func (s *SQLite) Update(ctx context.Context, cmd *durex.Instance) error {
 		nullTimeStr(cmd.CompletedAt),
 		nullTimeStr(cmd.DeadlineAt),
 		int64(cmd.Period),
+		nullStr(cmd.Cron),
 		nullStr(cmd.Error),
 		cmd.Attempt,
 		string(metadata),
@@ -243,7 +247,7 @@ func (s *SQLite) Get(ctx context.Context, id string) (*durex.Instance, error) {
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s WHERE id = ?
 	`, s.tableName)
 
@@ -256,7 +260,7 @@ func (s *SQLite) FindPending(ctx context.Context) ([]*durex.Instance, error) {
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE status IN ('PENDING', 'STARTED', 'REPEATING')
 		ORDER BY priority DESC, ready_at ASC
@@ -270,7 +274,7 @@ func (s *SQLite) FindByStatus(ctx context.Context, status durex.Status) ([]*dure
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE status = ?
 		ORDER BY created_at DESC
@@ -284,7 +288,7 @@ func (s *SQLite) FindByParent(ctx context.Context, parentID string) ([]*durex.In
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE parent_id = ?
 		ORDER BY created_at ASC
@@ -298,7 +302,7 @@ func (s *SQLite) FindByUniqueKey(ctx context.Context, key string) (*durex.Instan
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE unique_key = ? AND status IN ('PENDING', 'STARTED', 'REPEATING')
 		LIMIT 1
@@ -313,7 +317,7 @@ func (s *SQLite) FindByCorrelationID(ctx context.Context, correlationID string) 
 	query := fmt.Sprintf(`
 		SELECT id, name, data, status, retries, sequence, parent_id, priority,
 			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
-			period_ns, error, attempt, metadata
+			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE correlation_id = ?
 		ORDER BY created_at ASC
@@ -389,6 +393,7 @@ func (s *SQLite) scanInstance(row *sql.Row) (*durex.Instance, error) {
 		tags          sql.NullString
 		metadata      sql.NullString
 		periodNs      int64
+		cronExpr      sql.NullString
 		parentID      sql.NullString
 		uniqueKey     sql.NullString
 		traceID       sql.NullString
@@ -420,6 +425,7 @@ func (s *SQLite) scanInstance(row *sql.Row) (*durex.Instance, error) {
 		&completedAt,
 		&deadlineAt,
 		&periodNs,
+		&cronExpr,
 		&errMsg,
 		&cmd.Attempt,
 		&metadata,
@@ -432,7 +438,7 @@ func (s *SQLite) scanInstance(row *sql.Row) (*durex.Instance, error) {
 		return nil, err
 	}
 
-	return s.populateInstance(&cmd, data, sequence, tags, metadata, periodNs,
+	return s.populateInstance(&cmd, data, sequence, tags, metadata, periodNs, cronExpr,
 		parentID, uniqueKey, traceID, correlationID, createdAt, readyAt, startedAt, completedAt, deadlineAt, errMsg)
 }
 
@@ -444,6 +450,7 @@ func (s *SQLite) scanInstanceFromRows(rows *sql.Rows) (*durex.Instance, error) {
 		tags          sql.NullString
 		metadata      sql.NullString
 		periodNs      int64
+		cronExpr      sql.NullString
 		parentID      sql.NullString
 		uniqueKey     sql.NullString
 		traceID       sql.NullString
@@ -475,6 +482,7 @@ func (s *SQLite) scanInstanceFromRows(rows *sql.Rows) (*durex.Instance, error) {
 		&completedAt,
 		&deadlineAt,
 		&periodNs,
+		&cronExpr,
 		&errMsg,
 		&cmd.Attempt,
 		&metadata,
@@ -484,7 +492,7 @@ func (s *SQLite) scanInstanceFromRows(rows *sql.Rows) (*durex.Instance, error) {
 		return nil, err
 	}
 
-	return s.populateInstance(&cmd, data, sequence, tags, metadata, periodNs,
+	return s.populateInstance(&cmd, data, sequence, tags, metadata, periodNs, cronExpr,
 		parentID, uniqueKey, traceID, correlationID, createdAt, readyAt, startedAt, completedAt, deadlineAt, errMsg)
 }
 
@@ -492,6 +500,7 @@ func (s *SQLite) populateInstance(
 	cmd *durex.Instance,
 	data, sequence, tags, metadata sql.NullString,
 	periodNs int64,
+	cronExpr sql.NullString,
 	parentID, uniqueKey, traceID, correlationID sql.NullString,
 	createdAt, readyAt string,
 	startedAt, completedAt, deadlineAt, errMsg sql.NullString,
@@ -567,6 +576,10 @@ func (s *SQLite) populateInstance(
 	}
 
 	cmd.Period = time.Duration(periodNs)
+
+	if cronExpr.Valid {
+		cmd.Cron = cronExpr.String
+	}
 
 	return cmd, nil
 }

@@ -87,6 +87,23 @@ func Period(d Duration) FuncOption {
 	}
 }
 
+// Cron sets a cron expression for scheduled commands.
+// When a command returns Repeat(), it will be rescheduled based on this expression.
+// Uses standard cron format: "minute hour day-of-month month day-of-week"
+//
+// Examples:
+//
+//	durex.Cron("0 0 * * *")     // Daily at midnight
+//	durex.Cron("*/15 * * * *")  // Every 15 minutes
+//	durex.Cron("0 9 * * 1-5")   // Weekdays at 9 AM
+//
+// If both Cron and Period are set, Cron takes precedence.
+func Cron(expr string) FuncOption {
+	return func(f *FuncCommand) {
+		f.defaultSpec.Cron = expr
+	}
+}
+
 // Deadline sets the default deadline.
 func Deadline(d Duration) FuncOption {
 	return func(f *FuncCommand) {

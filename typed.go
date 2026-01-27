@@ -49,6 +49,23 @@ func WithPeriod[T any](d time.Duration) TypedOption[T] {
 	}
 }
 
+// WithCron sets a cron expression for scheduled typed commands.
+// When a command returns Repeat(), it will be rescheduled based on this expression.
+// Uses standard cron format: "minute hour day-of-month month day-of-week"
+//
+// Examples:
+//
+//	durex.WithCron[MyData]("0 0 * * *")     // Daily at midnight
+//	durex.WithCron[MyData]("*/15 * * * *")  // Every 15 minutes
+//	durex.WithCron[MyData]("0 9 * * 1-5")   // Weekdays at 9 AM
+//
+// If both WithCron and WithPeriod are set, Cron takes precedence.
+func WithCron[T any](expr string) TypedOption[T] {
+	return func(c *TypedCommand[T]) {
+		c.defaultSpec.Cron = expr
+	}
+}
+
 // WithDeadline sets the default deadline for typed commands.
 func WithDeadline[T any](d time.Duration) TypedOption[T] {
 	return func(c *TypedCommand[T]) {

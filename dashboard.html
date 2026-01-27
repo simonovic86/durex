@@ -262,6 +262,13 @@
             color: var(--text-secondary);
         }
         
+        .cron-badge {
+            font-size: 0.75rem;
+            color: var(--accent-purple);
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            margin-top: 0.25rem;
+        }
+        
         .empty-state {
             padding: 3rem;
             text-align: center;
@@ -522,7 +529,10 @@
                 tbody.innerHTML = data.commands.map(cmd => `
                     <tr>
                         <td class="mono" title="${cmd.id}">${truncateId(cmd.id)}</td>
-                        <td><strong>${cmd.name}</strong></td>
+                        <td>
+                            <strong>${cmd.name}</strong>
+                            ${cmd.cron ? `<div class="cron-badge" title="Cron schedule">⏰ ${cmd.cron}</div>` : ''}
+                        </td>
                         <td><span class="status-pill ${cmd.status.toLowerCase()}">${cmd.status}</span></td>
                         <td>${cmd.attempt || 0}</td>
                         <td class="time-ago">${formatTimeAgo(cmd.created_at)}</td>
