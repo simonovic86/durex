@@ -291,7 +291,7 @@ func (e *Executor) handleAPIRetry(w http.ResponseWriter, r *http.Request) {
 	)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"message": "Command scheduled for retry",
 		"id":      id,
@@ -322,7 +322,7 @@ func (e *Executor) handleAPICancel(w http.ResponseWriter, r *http.Request) {
 	e.logger.Info("durex: command cancelled via dashboard", "id", id)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"message": "Command cancelled",
 		"id":      id,
@@ -351,7 +351,7 @@ func (e *Executor) handleAPIHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":      id,
 		"history": history,
 	})
