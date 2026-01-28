@@ -84,8 +84,15 @@ func main() {
 
 	// Start executor
 	ctx := context.Background()
-	executor.Start(ctx)
-	defer executor.Stop()
+	if err := executor.Start(ctx); err != nil {
+		slog.Error("Failed to start executor", "error", err)
+		return
+	}
+	defer func() {
+		if err := executor.Stop(); err != nil {
+			slog.Error("Failed to stop executor", "error", err)
+		}
+	}()
 
 	// Submit an order
 	_, err := executor.Add(ctx, durex.Spec{
