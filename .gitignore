@@ -5,6 +5,7 @@
 *.so
 *.dylib
 durex
+bin/
 
 # Test binary
 *.test

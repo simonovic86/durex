@@ -86,6 +86,7 @@ Most teams face a choice: simple queues (Asynq, River) that lack workflows, or T
 | Feature | Description |
 |---------|-------------|
 | **Web Dashboard** | Built-in UI with retry/cancel actions |
+| **CLI Tool** | Command-line management: list, stats, retry, cancel |
 | **Prometheus Metrics** | Counters, histograms, gauges for all operations |
 | **Health Endpoint** | `/api/health` for load balancers |
 | **Tracing** | Trace and correlation IDs across command chains |
@@ -129,9 +130,39 @@ graph TB
 
 ## Installation
 
+### Library
+
 ```bash
 go get github.com/simonovic86/durex
 ```
+
+### CLI Tool
+
+```bash
+# Install globally
+go install github.com/simonovic86/durex/cmd/durex@latest
+
+# Or build from source
+cd cmd/durex && go build -o durex .
+```
+
+The CLI provides command-line management of durex workflows:
+
+```bash
+# List failed commands
+durex list --db=/path/to/durex.db --status=failed
+
+# Show statistics
+durex stats --db=/path/to/durex.db --detailed
+
+# Retry a failed command
+durex retry cmd_abc123 --db=/path/to/durex.db
+
+# Start dashboard
+durex dashboard --db=/path/to/durex.db
+```
+
+See [CLI documentation](./cmd/durex/README.md) for full details.
 
 ## Quick Start
 
@@ -844,10 +875,13 @@ go run main.go
 |---------|-------------|
 | [examples/basic](./examples/basic) | Simple jobs, retries, repeating tasks, dashboard |
 | [examples/workflow](./examples/workflow) | E-commerce order flow with sequences and saga |
+| [examples/fanin](./examples/fanin) | Fan-in pattern with parallel task coordination |
+| [CLI Tool](./cmd/durex) | Command-line management interface |
 
 ## Documentation
 
 - **[Workflows & Chaining Guide](./docs/WORKFLOWS.md)** — Sequences, fan-out/fan-in, saga pattern, best practices
+- **[CLI Tool Guide](./cmd/durex/README.md)** — Command-line management and operations
 - **[GoDoc Reference](https://pkg.go.dev/github.com/simonovic86/durex)** — Complete API documentation
 
 ## Contributing

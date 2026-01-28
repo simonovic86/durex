@@ -38,7 +38,19 @@ tidy:
 
 clean:
 	rm -f coverage.out coverage.html
+	rm -rf bin/
 	$(GOCMD) clean
+
+# CLI Tool
+cli:
+	@echo "Building durex CLI..."
+	cd cmd/durex && $(GOBUILD) -o ../../bin/durex .
+	@echo "✅ CLI built: bin/durex"
+
+install-cli:
+	@echo "Installing durex CLI..."
+	cd cmd/durex && $(GOCMD) install .
+	@echo "✅ CLI installed"
 
 # Examples
 examples: build
