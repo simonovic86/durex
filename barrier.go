@@ -31,9 +31,6 @@ type barrierData struct {
 
 	// ChildIDs tracks the IDs of the child commands (for reference).
 	ChildIDs []string `json:"child_ids,omitempty"`
-
-	// PollInterval is how often to check for completion (default: 1s).
-	PollInterval time.Duration `json:"poll_interval,omitempty"`
 }
 
 // Execute implements Command.
@@ -71,10 +68,6 @@ func (b *barrierCommand) Execute(ctx context.Context, cmd *Instance) (Result, er
 	if len(relevantChildren) != data.ExpectedCount {
 		// Still waiting for children to be created
 		// This can happen if the barrier is scheduled before all children are persisted
-		pollInterval := data.PollInterval
-		if pollInterval == 0 {
-			pollInterval = time.Second
-		}
 		cmd.Set("_barrier_check_count", cmd.GetInt("_barrier_check_count")+1)
 
 		// If we've checked too many times, something is wrong
@@ -83,7 +76,7 @@ func (b *barrierCommand) Execute(ctx context.Context, cmd *Instance) (Result, er
 				data.ExpectedCount, len(relevantChildren))
 		}
 
-		// Poll again after interval
+		// Poll again after interval (uses command's Period)
 		return Repeat(), nil
 	}
 

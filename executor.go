@@ -957,7 +957,6 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 				"expected_count": len(childIDs),
 				"continuation":   continuation,
 				"child_ids":      childIDs,
-				"poll_interval":  time.Second,
 			},
 			TraceID:       instance.TraceID,
 			CorrelationID: instance.CorrelationID,
