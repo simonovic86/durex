@@ -205,7 +205,70 @@ executor.Add(ctx, durex.Spec{
 
 ### Fan-In (Aggregation)
 
-Collect results from multiple parallel commands. Use a coordination pattern with shared state.
+Wait for multiple parallel commands to complete before continuing (barrier pattern).
+
+#### Built-in: SpawnThen
+
+The simplest way to implement fan-in is with `SpawnThen`, which automatically waits for all parallel tasks:
+
+```go
+executor.HandleFunc("processOrder", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    orderId := cmd.GetString("orderId")
+    
+    // Run these tasks in parallel, wait for ALL to complete
+    return durex.SpawnThen(
+        []durex.Spec{
+            {Name: "chargePayment", Data: durex.M{"orderId": orderId}},
+            {Name: "reserveInventory", Data: durex.M{"orderId": orderId}},
+            {Name: "sendEmail", Data: durex.M{"orderId": orderId}},
+        },
+        // This runs ONLY after all 3 tasks complete successfully
+        durex.Spec{Name: "shipOrder", Data: durex.M{"orderId": orderId}},
+    ), nil
+})
+
+executor.HandleFunc("chargePayment", chargePaymentFn)
+executor.HandleFunc("reserveInventory", reserveInventoryFn)
+executor.HandleFunc("sendEmail", sendEmailFn)
+
+executor.HandleFunc("shipOrder", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    // All parallel tasks completed successfully
+    // Access merged results with prefixes if needed
+    orderId := cmd.GetString("orderId")
+    
+    // Ship the order...
+    return durex.Empty(), nil
+})
+```
+
+**How it works:**
+- The executor spawns all parallel tasks
+- Creates an internal barrier command that polls for completion
+- If all parallel tasks succeed, the continuation is spawned
+- If any task fails, the continuation is **not** spawned
+
+```
+┌─────────────────┐
+│  processOrder   │
+└────────┬────────┘
+         │
+         ├──▶ chargePayment ─────┐
+         │                       │
+         ├──▶ reserveInventory ──┤
+         │                       │ ALL complete
+         └──▶ sendEmail ─────────┤
+                                 │
+                       (barrier waits)
+                                 │
+                                 ▼
+                         ┌──────────────┐
+                         │  shipOrder   │
+                         └──────────────┘
+```
+
+#### Manual Coordination
+
+For advanced cases requiring custom aggregation logic, use manual coordination with shared state:
 
 ```go
 // Worker commands that process items
@@ -683,7 +746,8 @@ executor.HandleFunc("myTask", func(ctx context.Context, cmd *durex.Instance) (du
 |---------|----------|--------|
 | **Sequence** | Linear workflow | `Spec.Sequence` + `ContinueSequence()` |
 | **Fan-Out** | Parallel processing | `Spawn(specs...)` |
-| **Fan-In** | Aggregate results | External coordination + `Next()` |
+| **Fan-In** | Aggregate results | `SpawnThen(parallel, continuation)` |
+| **Fan-In (Manual)** | Custom aggregation | External coordination + `Next()` |
 | **Branching** | Conditional flow | `Next(spec)` based on logic |
 | **Saga** | Distributed transactions | `OnRecover` + compensation commands |
 | **Retry** | Transient failures | `Retries(n)` + `Retry()` |

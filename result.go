@@ -7,6 +7,13 @@ type Result struct {
 	// Child commands will have their ParentID set to this command's ID.
 	Commands []Spec
 
+	// Continuation is spawned after ALL Commands complete successfully.
+	// This enables the fan-in pattern where parallel tasks must finish
+	// before continuing the workflow. The executor creates a barrier
+	// command that monitors the Commands and spawns Continuation when done.
+	// Only valid when Commands is non-empty.
+	Continuation *Spec
+
 	// Repeat signals that this command should be rescheduled.
 	// The command will run again after its Period duration.
 	// Use this for recurring tasks like cleanup jobs or polling.
@@ -93,4 +100,32 @@ func Next(spec Spec) Result {
 //	}
 func Spawn(specs ...Spec) Result {
 	return Result{Commands: specs}
+}
+
+// SpawnThen returns a Result that spawns parallel commands and waits for all
+// to complete before continuing with a follow-up command (fan-in pattern).
+//
+// The executor creates an internal barrier command that monitors the parallel
+// tasks. When all parallel commands complete successfully, the continuation
+// command is spawned automatically.
+//
+// Example:
+//
+//	func (c *ProcessOrderCommand) Execute(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+//		// Process payment, reserve inventory, and send email in parallel
+//		// Then ship the order only after all three complete
+//		return durex.SpawnThen(
+//			[]durex.Spec{
+//				{Name: "chargePayment", Data: cmd.Data},
+//				{Name: "reserveInventory", Data: cmd.Data},
+//				{Name: "sendEmail", Data: cmd.Data},
+//			},
+//			durex.Spec{Name: "shipOrder", Data: cmd.Data},
+//		), nil
+//	}
+func SpawnThen(parallel []Spec, then Spec) Result {
+	return Result{
+		Commands:     parallel,
+		Continuation: &then,
+	}
 }

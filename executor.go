@@ -118,6 +118,9 @@ func (e *Executor) Start(ctx context.Context) error {
 		return nil
 	}
 
+	// Register internal barrier command
+	e.registerBarrierCommand()
+
 	// Check if storage supports locking (safe for multi-instance)
 	_, useLocking := e.storage.(LockingStorage)
 
@@ -893,6 +896,7 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 	}
 
 	// Spawn children
+	childIDs := make([]string, 0, len(result.Commands))
 	for _, spec := range result.Commands {
 		// Propagate trace and correlation IDs to children
 		if spec.TraceID == "" && instance.TraceID != "" {
@@ -926,7 +930,63 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 			)
 			continue
 		}
+		childIDs = append(childIDs, child.ID)
 		e.schedule(child)
+	}
+
+	// Spawn barrier command if there's a continuation
+	if result.Continuation != nil && len(childIDs) > 0 {
+		// Propagate trace and correlation IDs to continuation
+		continuation := *result.Continuation
+		if continuation.TraceID == "" && instance.TraceID != "" {
+			continuation.TraceID = instance.TraceID
+		}
+		if continuation.CorrelationID == "" {
+			if instance.CorrelationID != "" {
+				continuation.CorrelationID = instance.CorrelationID
+			} else {
+				continuation.CorrelationID = instance.ID
+			}
+		}
+
+		// Create barrier command that waits for all children
+		barrierSpec := Spec{
+			Name: barrierCommandName,
+			Data: M{
+				"coordinator_id": instance.ID,
+				"expected_count": len(childIDs),
+				"continuation":   continuation,
+				"child_ids":      childIDs,
+				"poll_interval":  time.Second,
+			},
+			TraceID:       instance.TraceID,
+			CorrelationID: instance.CorrelationID,
+			Delay:         time.Second, // Give children time to be created
+		}
+
+		barrier, err := e.createInstance(barrierSpec)
+		if err != nil {
+			e.logger.Error("durex: failed to create barrier command",
+				"parent_id", instance.ID,
+				"error", err,
+			)
+		} else {
+			barrier.ParentID = &instance.ID
+			if err := e.storage.Create(ctx, barrier); err != nil {
+				e.logger.Error("durex: failed to persist barrier command",
+					"parent_id", instance.ID,
+					"barrier_id", barrier.ID,
+					"error", err,
+				)
+			} else {
+				e.schedule(barrier)
+				e.logger.Debug("durex: barrier command created",
+					"parent_id", instance.ID,
+					"barrier_id", barrier.ID,
+					"children_count", len(childIDs),
+				)
+			}
+		}
 	}
 
 	// Mark completed

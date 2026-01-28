@@ -39,6 +39,7 @@ Most teams face a choice: simple queues (Asynq, River) that lack workflows, or T
 | **Embedded dashboard** | ✅ Built-in | ❌ Separate | ❌ Separate | ✅ Built-in |
 | **Cron scheduling** | ✅ | ✅ | ✅ | ✅ |
 | **Workflow sequences** | ✅ | ❌ | ❌ | ✅ |
+| **Fan-in (parallel + wait)** | ✅ | ❌ | ❌ | ✅ |
 | **Saga pattern** | ✅ | ❌ | ❌ | ✅ |
 | **Dead Letter Queue** | ✅ | ✅ | ❌ | ✅ |
 | **Prometheus metrics** | ✅ | ✅ | ✅ | ✅ |
@@ -68,6 +69,7 @@ Most teams face a choice: simple queues (Asynq, River) that lack workflows, or T
 | **Automatic Retries** | Exponential backoff, jitter, configurable per command |
 | **Cron Scheduling** | Standard cron expressions for precise scheduled execution |
 | **Workflows** | Chain commands with `Sequence`, pass data between steps |
+| **Fan-In Pattern** | Wait for parallel tasks with `SpawnThen` (barrier coordination) |
 | **Saga Pattern** | Compensation handlers for failed workflows (`OnRecover`) |
 | **Type Safety** | Generic typed handlers with `HandleTyped[T]` |
 
@@ -285,6 +287,45 @@ executor.Add(ctx, durex.Spec{
     Sequence: []string{"step2", "step3"},
     Data:     durex.M{"orderId": "123"},
 })
+```
+
+### Fan-In: Wait for Parallel Tasks
+
+Use `SpawnThen` to run tasks in parallel and wait for all to complete (barrier pattern):
+
+```go
+executor.HandleFunc("processOrder", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+    orderId := cmd.GetString("orderId")
+    
+    // Run these tasks in parallel, wait for ALL to complete
+    return durex.SpawnThen(
+        []durex.Spec{
+            {Name: "chargePayment", Data: durex.M{"orderId": orderId}},
+            {Name: "reserveInventory", Data: durex.M{"orderId": orderId}},
+            {Name: "sendEmail", Data: durex.M{"orderId": orderId}},
+        },
+        // This runs ONLY after all 3 tasks complete successfully
+        durex.Spec{Name: "shipOrder", Data: durex.M{"orderId": orderId}},
+    ), nil
+})
+
+// The continuation only runs if ALL parallel tasks succeed
+// If any task fails, the continuation is NOT spawned
+```
+
+```
+processOrder
+     │
+     ├──▶ chargePayment ─────┐
+     │                        │
+     ├──▶ reserveInventory ───┤ ALL complete
+     │                        │
+     └──▶ sendEmail ──────────┤
+                              │
+                    (barrier waits)
+                              │
+                              ▼
+                         shipOrder
 ```
 
 ## Cron Scheduling
