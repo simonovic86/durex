@@ -3,12 +3,14 @@ package durex
 import (
 	"math"
 	"math/rand"
+	"sync"
 	"time"
 )
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
+var (
+	jitterRandMu sync.Mutex
+	jitterRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
+)
 
 // BackoffStrategy calculates the delay before retrying a failed command.
 type BackoffStrategy interface {
@@ -91,7 +93,10 @@ func (b JitteredBackoff) NextDelay(attempt int) time.Duration {
 	}
 
 	jitterRange := float64(base) * jitterRate
-	jitter := (rand.Float64()*2 - 1) * jitterRange // -jitterRange to +jitterRange
+	jitterRandMu.Lock()
+	randomValue := jitterRand.Float64()
+	jitterRandMu.Unlock()
+	jitter := (randomValue*2 - 1) * jitterRange // -jitterRange to +jitterRange
 	delay := time.Duration(float64(base) + jitter)
 	if delay < 0 {
 		return 0
