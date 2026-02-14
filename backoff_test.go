@@ -148,6 +148,30 @@ func TestJitteredBackoff(t *testing.T) {
 	}
 }
 
+func TestJitteredBackoff_NilStrategy(t *testing.T) {
+	backoff := durex.JitteredBackoff{JitterRate: 0.5}
+
+	delay := backoff.NextDelay(1)
+	if delay != 0 {
+		t.Errorf("Expected 0 with nil strategy, got %v", delay)
+	}
+}
+
+func TestJitteredBackoff_ClampsNegativeDelay(t *testing.T) {
+	base := durex.ConstantBackoff{Delay: 100 * time.Millisecond}
+	backoff := durex.JitteredBackoff{
+		Strategy:   base,
+		JitterRate: 10.0,
+	}
+
+	for i := 0; i < 100; i++ {
+		delay := backoff.NextDelay(1)
+		if delay < 0 {
+			t.Fatalf("Expected non-negative delay, got %v", delay)
+		}
+	}
+}
+
 func TestJitteredBackoff_ZeroJitter(t *testing.T) {
 	base := durex.ConstantBackoff{Delay: 100 * time.Millisecond}
 	backoff := durex.JitteredBackoff{

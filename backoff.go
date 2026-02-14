@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 // BackoffStrategy calculates the delay before retrying a failed command.
 type BackoffStrategy interface {
 	// NextDelay returns the delay before the next retry attempt.
@@ -72,14 +76,28 @@ type JitteredBackoff struct {
 
 // NextDelay implements BackoffStrategy.
 func (b JitteredBackoff) NextDelay(attempt int) time.Duration {
+	if b.Strategy == nil {
+		return 0
+	}
+
 	base := b.Strategy.NextDelay(attempt)
 	if b.JitterRate <= 0 {
 		return base
 	}
 
-	jitterRange := float64(base) * b.JitterRate
+	jitterRate := b.JitterRate
+	if jitterRate > 1 {
+		jitterRate = 1
+	}
+
+	jitterRange := float64(base) * jitterRate
 	jitter := (rand.Float64()*2 - 1) * jitterRange // -jitterRange to +jitterRange
-	return time.Duration(float64(base) + jitter)
+	delay := time.Duration(float64(base) + jitter)
+	if delay < 0 {
+		return 0
+	}
+
+	return delay
 }
 
 // DefaultExponentialBackoff returns a sensible default exponential backoff.
