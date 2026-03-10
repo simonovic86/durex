@@ -43,7 +43,7 @@ func WithQueueSize(size int) Option {
 // Default is 0 (no retries).
 func WithDefaultRetries(n int) Option {
 	return func(e *Executor) {
-		e.defaultRetries = n
+		e.defaultRetries = max(n, 0)
 	}
 }
 
@@ -56,7 +56,9 @@ func WithDefaultRetries(n int) Option {
 // and the command is treated as failed (will retry if retries remain).
 func WithDefaultTimeout(d time.Duration) Option {
 	return func(e *Executor) {
-		e.defaultTimeout = d
+		if d > 0 {
+			e.defaultTimeout = d
+		}
 	}
 }
 

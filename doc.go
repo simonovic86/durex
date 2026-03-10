@@ -7,6 +7,24 @@ and Temporal for teams who want workflow capabilities without infrastructure com
 
 Use SQLite for development, PostgreSQL for production. No Redis or Kafka required.
 
+# Quick Start
+
+	store := storage.NewMemory()
+	exec := durex.New(store, durex.WithParallelism(4))
+
+	exec.HandleFunc("greet", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+		fmt.Println("Hello,", cmd.GetString("name"))
+		return durex.Empty(), nil
+	})
+
+	exec.Start(context.Background())
+	defer exec.Stop()
+
+	exec.Add(ctx, durex.Spec{
+		Name: "greet",
+		Data: durex.M{"name": "World"},
+	})
+
 # Key Features
 
   - Persistent Commands: Commands survive process restarts

@@ -27,9 +27,9 @@ Items marked **DONE** were addressed in commits `90b6e6e`, `72d49e3`, or subsequ
 - [x] **DONE** Shutdown timeout returns nil, leaks goroutines — `Stop()` now returns error on timeout
 - [x] **DONE** `execute`/`executeClaimedCommand` massive duplication — unified into single execution path
 - [ ] Queue channel dead code in polling mode — `schedule()` pushes to `e.queue` but no `worker()` goroutines consume it in `LockingStorage` mode
-- [ ] Executor not reusable after Stop — context created once in `New()`, never recreated
+- [x] **DONE** Executor not reusable after Stop — `Start()` now reinitializes runtime state after `Stop()`
 - [x] **DONE** `ContinueSequence` shallow-copies data — now uses `deepCopyMap` for nested maps
-- [ ] JSON deep copy silently coerces `int` → `float64` — `deepCopyMap` via JSON round-trip
+- [x] **DONE** JSON deep copy silently coerces `int` → `float64` — documented on `Get()` and `Set()` godocs; `GetInt()` handles transparently
 - [ ] `Typed()` helper silently swallows marshal errors — creates empty-data specs on failure (`typed.go:170-180`)
 - [ ] Recover silently skips on unmarshal failure in TypedCommand — user's compensation function never called (`typed.go:91-100`)
 - [ ] `replay` can block `Start()` indefinitely — no context check between iterations when queue is full (`executor.go:1199-1211`)
@@ -49,13 +49,13 @@ Items marked **DONE** were addressed in commits `90b6e6e`, `72d49e3`, or subsequ
 
 ## API / Developer Experience
 
-- [ ] Missing Spec builder methods — no `WithPeriod`, `WithCron`, `WithSequence`, `WithDeadlineAt`
-- [ ] Inconsistent option naming — `FuncOption` uses `Retries(n)` / `Period(d)` / `OnRecover(fn)`; `TypedOption` uses `WithRetries(n)` / `WithPeriod(d)` / `WithRecover(fn)`
-- [ ] `TypedCommand` missing `Expirable` support — no `WithExpired` option, typed commands can't handle deadline expiration
-- [ ] `HandleTyped` returns void — unlike `Register()` and `HandleFunc()` which return `*Executor` for chaining
+- [x] **DONE** Missing Spec builder methods — added `WithPeriod`, `WithCron`, `WithSequence`, `WithDeadlineAt`
+- [ ] Inconsistent option naming — `FuncOption` uses `Retries(n)` / `Period(d)` / `OnRecover(fn)`; `TypedOption` uses `WithRetries(n)` / `WithPeriod(d)` / `WithRecover(fn)` (naming difference is necessary due to Go generic function constraints)
+- [x] **DONE** `TypedCommand` missing `Expirable` support — added `WithExpired[T]` and `WithTags[T]` options, `Expired()` method
+- [x] **DONE** `HandleTyped` returns void — now returns `*Executor` for chaining
 - [ ] `Register` panics, `MustRegister` doesn't — backwards from Go convention (`Must*` = panics)
-- [ ] `Period` vs `RepeatInterval` terminology drift — Spec field is `Period`, executor option is `WithDefaultRepeatInterval`
-- [ ] Options missing bounds checks — negative retries, negative timeout, zero/negative check interval accepted
+- [x] **DONE** `Period` vs `RepeatInterval` terminology drift — added `WithDefaultPeriod` as preferred alias
+- [x] **DONE** Options missing bounds checks — negative retries clamped to 0, non-positive durations ignored
 - [ ] Rate limiter wasted wakeups under dual limits — TOCTOU between global and per-command checks
 
 ## Test Coverage
@@ -67,7 +67,7 @@ Items marked **DONE** were addressed in commits `90b6e6e`, `72d49e3`, or subsequ
 - [ ] Dead Letter Queue — 0 tests for `ReplayFromDLQ`, `FindDeadLettered`, `PurgeDLQ`
 - [ ] Middleware chains — 0 tests for `executeWithMiddleware`
 - [ ] Rate limiter — 0 tests for entire `ratelimit.go`
-- [ ] Graceful shutdown — 0 tests for timeout, double-stop, concurrent add+stop
+- [x] **DONE** Graceful shutdown — tests for timeout, double-stop, stop-before-start, add-after-stop, restart-after-stop
 - [ ] Polling worker mode — 0 tests for `pollingWorker`, `claimAndExecute`
 - [ ] `AddMany`, `CancelByTag` — 0 tests at executor level
 - [ ] `HookedStorage` — 0 tests

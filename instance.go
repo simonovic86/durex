@@ -88,7 +88,12 @@ type Instance struct {
 }
 
 // Get retrieves a value from the command data with type assertion.
-// Returns the zero value if the key doesn't exist or type doesn't match.
+// Returns nil if the key doesn't exist.
+//
+// Note: Data passes through JSON serialization during persistence and deep
+// copies (Clone, ContinueSequence). This means Go integer types (int, int64)
+// are coerced to float64 after a JSON round-trip. Use GetInt for integer
+// values, which handles this coercion transparently.
 func (i *Instance) Get(key string) any {
 	if i.Data == nil {
 		return nil
@@ -136,7 +141,11 @@ func (i *Instance) GetMap(key string) M {
 }
 
 // Set stores a value in the command data.
-// Note: Changes are not automatically persisted. Call executor.Update() if needed.
+// Changes are not automatically persisted. Call executor.Update() if needed.
+//
+// Values stored via Set pass through JSON serialization during persistence
+// and deep copies. Integer types will be read back as float64 from JSON.
+// Use GetInt to retrieve integer values safely regardless of the underlying type.
 func (i *Instance) Set(key string, value any) {
 	if i.Data == nil {
 		i.Data = make(M)
