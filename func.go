@@ -60,9 +60,10 @@ func (f *FuncCommand) Default() Spec {
 type FuncOption func(*FuncCommand)
 
 // Retries sets the default retry count.
+// Negative values are clamped to 0.
 func Retries(n int) FuncOption {
 	return func(f *FuncCommand) {
-		f.defaultSpec.Retries = n
+		f.defaultSpec.Retries = max(n, 0)
 	}
 }
 
@@ -81,9 +82,12 @@ func OnExpired(fn ExpiredFunc) FuncOption {
 }
 
 // Period sets the repeat period for recurring commands.
+// Non-positive durations are ignored.
 func Period(d Duration) FuncOption {
 	return func(f *FuncCommand) {
-		f.defaultSpec.Period = d
+		if d > 0 {
+			f.defaultSpec.Period = d
+		}
 	}
 }
 
@@ -105,9 +109,12 @@ func Cron(expr string) FuncOption {
 }
 
 // Deadline sets the default deadline.
+// Non-positive durations are ignored.
 func Deadline(d Duration) FuncOption {
 	return func(f *FuncCommand) {
-		f.defaultSpec.Deadline = d
+		if d > 0 {
+			f.defaultSpec.Deadline = d
+		}
 	}
 }
 

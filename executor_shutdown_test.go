@@ -123,3 +123,48 @@ func TestExecutor_AddAfterStop(t *testing.T) {
 		t.Error("Add after Stop should return error")
 	}
 }
+
+func TestExecutor_RestartAfterStop(t *testing.T) {
+	store := storage.NewMemory()
+	executor := durex.New(store, durex.WithParallelism(1))
+
+	var executed atomic.Int32
+	executor.HandleFunc("restart-test", func(ctx context.Context, cmd *durex.Instance) (durex.Result, error) {
+		executed.Add(1)
+		return durex.Empty(), nil
+	})
+
+	ctx := context.Background()
+
+	// First run
+	if err := executor.Start(ctx); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	if _, err := executor.Add(ctx, durex.Spec{Name: "restart-test"}); err != nil {
+		t.Fatalf("first Add: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := executor.Stop(); err != nil {
+		t.Fatalf("first Stop: %v", err)
+	}
+
+	if got := executed.Load(); got != 1 {
+		t.Fatalf("after first run: expected 1 execution, got %d", got)
+	}
+
+	// Restart
+	if err := executor.Start(ctx); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	if _, err := executor.Add(ctx, durex.Spec{Name: "restart-test"}); err != nil {
+		t.Fatalf("second Add: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := executor.Stop(); err != nil {
+		t.Fatalf("second Stop: %v", err)
+	}
+
+	if got := executed.Load(); got != 2 {
+		t.Errorf("after restart: expected 2 executions, got %d", got)
+	}
+}

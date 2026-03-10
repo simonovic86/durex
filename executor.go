@@ -121,9 +121,20 @@ func (e *Executor) Register(cmd Command) *Executor {
 
 // Start begins processing commands.
 // It replays pending commands from storage and starts worker goroutines.
+// Can be called again after Stop() to restart the executor.
 func (e *Executor) Start(ctx context.Context) error {
 	if e.started.Load() {
 		return nil
+	}
+
+	// If previously stopped, reinitialize runtime state
+	if e.stopping.Load() {
+		e.ctx, e.cancel = context.WithCancel(context.Background())
+		e.stopping.Store(false)
+		e.queue = make(chan *Instance, e.queueSize)
+		e.delayedTimers = make(map[string]*time.Timer)
+		e.wg = sync.WaitGroup{}
+		e.dashboardServer = nil
 	}
 
 	// Register internal barrier command

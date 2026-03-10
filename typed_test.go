@@ -121,3 +121,150 @@ func TestTypedCommand_Recover_UnmarshalError(t *testing.T) {
 
 	_ = executor
 }
+
+func TestTypedCommand_Expired(t *testing.T) {
+	type MyData struct {
+		Value string `json:"value"`
+	}
+
+	expiredCalled := atomic.Bool{}
+	var receivedValue string
+
+	cmd := durex.NewTyped("expireTest",
+		func(ctx context.Context, data MyData, cmd *durex.Instance) (durex.Result, error) {
+			return durex.Empty(), nil
+		},
+		durex.WithExpired(func(ctx context.Context, data MyData, cmd *durex.Instance) (durex.Result, error) {
+			expiredCalled.Store(true)
+			receivedValue = data.Value
+			return durex.Empty(), nil
+		}),
+	)
+
+	instance := &durex.Instance{
+		ID:        "test-expired-1",
+		Name:      "expireTest",
+		Status:    durex.StatusPending,
+		Data:      durex.M{"value": "hello"},
+		CreatedAt: time.Now(),
+		ReadyAt:   time.Now(),
+	}
+
+	result, err := cmd.Expired(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !expiredCalled.Load() {
+		t.Error("expired function should have been called")
+	}
+	if receivedValue != "hello" {
+		t.Errorf("expected value 'hello', got %q", receivedValue)
+	}
+	if len(result.Commands) != 0 {
+		t.Error("expected empty result")
+	}
+}
+
+func TestTypedCommand_Expired_Nil(t *testing.T) {
+	type MyData struct {
+		Value string `json:"value"`
+	}
+
+	cmd := durex.NewTyped("expireNilTest",
+		func(ctx context.Context, data MyData, cmd *durex.Instance) (durex.Result, error) {
+			return durex.Empty(), nil
+		},
+	)
+
+	instance := &durex.Instance{
+		ID:        "test-expired-nil",
+		Name:      "expireNilTest",
+		Status:    durex.StatusPending,
+		Data:      durex.M{"value": "hello"},
+		CreatedAt: time.Now(),
+		ReadyAt:   time.Now(),
+	}
+
+	result, err := cmd.Expired(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Commands) != 0 {
+		t.Error("expected empty result from nil handler")
+	}
+}
+
+func TestTypedCommand_Expired_UnmarshalError(t *testing.T) {
+	type MyData struct {
+		Value string `json:"value"`
+	}
+
+	expiredCalled := atomic.Bool{}
+
+	cmd := durex.NewTyped("expireUnmarshalTest",
+		func(ctx context.Context, data MyData, cmd *durex.Instance) (durex.Result, error) {
+			return durex.Empty(), nil
+		},
+		durex.WithExpired(func(ctx context.Context, data MyData, cmd *durex.Instance) (durex.Result, error) {
+			expiredCalled.Store(true)
+			return durex.Empty(), nil
+		}),
+	)
+
+	instance := &durex.Instance{
+		ID:        "test-expired-bad",
+		Name:      "expireUnmarshalTest",
+		Status:    durex.StatusPending,
+		Data:      durex.M{"value": map[string]any{"nested": "object"}},
+		CreatedAt: time.Now(),
+		ReadyAt:   time.Now(),
+	}
+
+	_, err := cmd.Expired(context.Background(), instance)
+	if err == nil {
+		t.Error("expected error from Expired with bad data")
+	}
+	if expiredCalled.Load() {
+		t.Error("expired function should not have been called with bad data")
+	}
+}
+
+func TestTypedCommand_WithTags(t *testing.T) {
+	type MyData struct {
+		Value string `json:"value"`
+	}
+
+	cmd := durex.NewTyped("tagTest",
+		func(ctx context.Context, data MyData, cmd *durex.Instance) (durex.Result, error) {
+			return durex.Empty(), nil
+		},
+		durex.WithTags[MyData]("billing", "urgent"),
+	)
+
+	spec := cmd.Default()
+	if len(spec.Tags) != 2 {
+		t.Fatalf("expected 2 tags, got %d", len(spec.Tags))
+	}
+	if spec.Tags[0] != "billing" || spec.Tags[1] != "urgent" {
+		t.Errorf("expected tags [billing urgent], got %v", spec.Tags)
+	}
+}
+
+func TestHandleTyped_ReturnsExecutor(t *testing.T) {
+	type MyData struct {
+		Value string `json:"value"`
+	}
+
+	store := storage.NewMemory()
+	executor := durex.New(store)
+
+	returned := durex.HandleTyped(executor, "returnTest",
+		func(ctx context.Context, data MyData, cmd *durex.Instance) (durex.Result, error) {
+			return durex.Empty(), nil
+		},
+	)
+
+	if returned != executor {
+		t.Error("HandleTyped should return the same executor for chaining")
+	}
+}

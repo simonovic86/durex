@@ -153,6 +153,7 @@ func (b *barrierCommand) Default() Spec {
 }
 
 // registerBarrierCommand registers the internal barrier command with the executor.
+// Uses Overwrite to allow re-registration after executor restart.
 func (e *Executor) registerBarrierCommand() {
-	e.Register(&barrierCommand{executor: e})
+	e.registry.Overwrite(&barrierCommand{executor: e})
 }

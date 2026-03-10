@@ -17,11 +17,15 @@ type TypedExecuteFunc[T any] func(ctx context.Context, data T, cmd *Instance) (R
 // TypedRecoverFunc is a recovery function that receives typed data.
 type TypedRecoverFunc[T any] func(ctx context.Context, data T, cmd *Instance, err error) (Result, error)
 
+// TypedExpiredFunc is an expiration handler that receives typed data.
+type TypedExpiredFunc[T any] func(ctx context.Context, data T, cmd *Instance) (Result, error)
+
 // TypedCommand wraps a typed function as a Command.
 type TypedCommand[T any] struct {
 	name        string
 	executeFn   TypedExecuteFunc[T]
 	recoverFn   TypedRecoverFunc[T]
+	expiredFn   TypedExpiredFunc[T]
 	defaultSpec Spec
 }
 
@@ -29,9 +33,10 @@ type TypedCommand[T any] struct {
 type TypedOption[T any] func(*TypedCommand[T])
 
 // WithRetries sets the default retry count for typed commands.
+// Negative values are clamped to 0.
 func WithRetries[T any](n int) TypedOption[T] {
 	return func(c *TypedCommand[T]) {
-		c.defaultSpec.Retries = n
+		c.defaultSpec.Retries = max(n, 0)
 	}
 }
 
@@ -43,9 +48,12 @@ func WithRecover[T any](fn TypedRecoverFunc[T]) TypedOption[T] {
 }
 
 // WithPeriod sets the repeat period for typed commands.
+// Non-positive durations are ignored.
 func WithPeriod[T any](d time.Duration) TypedOption[T] {
 	return func(c *TypedCommand[T]) {
-		c.defaultSpec.Period = d
+		if d > 0 {
+			c.defaultSpec.Period = d
+		}
 	}
 }
 
@@ -67,9 +75,27 @@ func WithCron[T any](expr string) TypedOption[T] {
 }
 
 // WithDeadline sets the default deadline for typed commands.
+// Non-positive durations are ignored.
 func WithDeadline[T any](d time.Duration) TypedOption[T] {
 	return func(c *TypedCommand[T]) {
-		c.defaultSpec.Deadline = d
+		if d > 0 {
+			c.defaultSpec.Deadline = d
+		}
+	}
+}
+
+// WithExpired sets the expiration handler for typed commands.
+// Called when a command's deadline expires before execution begins.
+func WithExpired[T any](fn TypedExpiredFunc[T]) TypedOption[T] {
+	return func(c *TypedCommand[T]) {
+		c.expiredFn = fn
+	}
+}
+
+// WithTags sets default tags for typed commands.
+func WithTags[T any](tags ...string) TypedOption[T] {
+	return func(c *TypedCommand[T]) {
+		c.defaultSpec.Tags = tags
 	}
 }
 
@@ -97,6 +123,18 @@ func (c *TypedCommand[T]) Recover(ctx context.Context, cmd *Instance, err error)
 		return Empty(), fmt.Errorf("failed to unmarshal recovery data: %w", unmarshalErr)
 	}
 	return c.recoverFn(ctx, data, cmd, err)
+}
+
+// Expired implements Expirable.
+func (c *TypedCommand[T]) Expired(ctx context.Context, cmd *Instance) (Result, error) {
+	if c.expiredFn == nil {
+		return Empty(), nil
+	}
+	var data T
+	if err := c.unmarshalData(cmd.Data, &data); err != nil {
+		return Empty(), fmt.Errorf("failed to unmarshal expired data: %w", err)
+	}
+	return c.expiredFn(ctx, data, cmd)
 }
 
 // Default implements Defaulter.
@@ -153,9 +191,10 @@ func NewTyped[T any](name string, fn TypedExecuteFunc[T], opts ...TypedOption[T]
 //	    log.Printf("Processing order %s for $%.2f", data.OrderID, data.Amount)
 //	    return durex.Empty(), nil
 //	})
-func HandleTyped[T any](e *Executor, name string, fn TypedExecuteFunc[T], opts ...TypedOption[T]) {
+func HandleTyped[T any](e *Executor, name string, fn TypedExecuteFunc[T], opts ...TypedOption[T]) *Executor {
 	cmd := NewTyped(name, fn, opts...)
 	e.registry.MustRegister(cmd)
+	return e
 }
 
 // Typed creates a Spec with typed data.
@@ -198,5 +237,6 @@ func MustTyped[T any](name string, data T) Spec {
 var (
 	_ Command     = (*TypedCommand[any])(nil)
 	_ Recoverable = (*TypedCommand[any])(nil)
+	_ Expirable   = (*TypedCommand[any])(nil)
 	_ Defaulter   = (*TypedCommand[any])(nil)
 )
