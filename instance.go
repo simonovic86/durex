@@ -162,10 +162,10 @@ func (i *Instance) ContinueSequence(additionalData M) Result {
 	nextName := i.Sequence[0]
 	remaining := i.Sequence[1:]
 
-	// Merge data
-	data := make(M)
-	for k, v := range i.Data {
-		data[k] = v
+	// Deep copy data to prevent shared nested references
+	data := deepCopyMap(i.Data)
+	if data == nil {
+		data = make(M)
 	}
 	for k, v := range additionalData {
 		data[k] = v

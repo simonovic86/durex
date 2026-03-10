@@ -127,7 +127,7 @@ func Tags(tags ...string) FuncOption {
 //	    durex.Retries(3),
 //	    durex.OnRecover(handleFailure),
 //	)
-//	executor.Handle(cmd)
+//	executor.Register(cmd)
 func NewFunc(name string, fn ExecuteFunc, opts ...FuncOption) *FuncCommand {
 	cmd := &FuncCommand{
 		name:      name,

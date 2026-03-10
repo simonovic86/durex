@@ -288,10 +288,11 @@ func (p *Postgres) FindPending(ctx context.Context) ([]*durex.Instance, error) {
 			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE status IN ('PENDING', 'STARTED', 'REPEATING')
+		AND ready_at <= $1
 		ORDER BY priority DESC, ready_at ASC
 	`, p.tableName)
 
-	return p.queryInstances(ctx, query)
+	return p.queryInstances(ctx, query, time.Now())
 }
 
 // ClaimPending implements durex.LockingStorage.
@@ -452,7 +453,7 @@ func (p *Postgres) Cleanup(ctx context.Context, olderThan time.Duration) (int64,
 
 	query := fmt.Sprintf(`
 		DELETE FROM %s
-		WHERE status IN ('COMPLETED', 'FAILED', 'EXPIRED', 'CANCELLED')
+		WHERE status IN ('COMPLETED', 'FAILED', 'EXPIRED', 'CANCELLED', 'DEAD_LETTER')
 		AND completed_at < $1
 	`, p.tableName)
 
@@ -510,6 +511,14 @@ func (p *Postgres) Find(ctx context.Context, query durex.Query) ([]*durex.Instan
 		argNum++
 	}
 
+	if len(query.Tags) > 0 {
+		for _, tag := range query.Tags {
+			conditions = append(conditions, fmt.Sprintf("tags @> $%d::jsonb", argNum))
+			args = append(args, fmt.Sprintf("[%q]", tag))
+			argNum++
+		}
+	}
+
 	if query.CreatedAfter != nil {
 		conditions = append(conditions, fmt.Sprintf("created_at > $%d", argNum))
 		args = append(args, *query.CreatedAfter)
@@ -519,6 +528,7 @@ func (p *Postgres) Find(ctx context.Context, query durex.Query) ([]*durex.Instan
 	if query.CreatedBefore != nil {
 		conditions = append(conditions, fmt.Sprintf("created_at < $%d", argNum))
 		args = append(args, *query.CreatedBefore)
+		argNum++
 	}
 
 	whereClause := ""

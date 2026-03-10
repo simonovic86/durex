@@ -2,17 +2,17 @@
 
 Prioritized list of improvements identified from a full codebase audit (March 2026).
 
-Items marked **DONE** were addressed in commit `90b6e6e`.
+Items marked **DONE** were addressed in commits `90b6e6e`, `72d49e3`, or subsequent fixes.
 
 ## Bugs
 
 - [x] **DONE** Permanent commands always fail to start — `e.started` flag set after `e.Add()` call
 - [x] **DONE** Barrier fan-in data collision — same-name children overwrite each other's results
-- [ ] `CancelByTag` missing `RecordEvent` — unlike `Cancel()`, no `EventCancelled` is recorded in history (`executor.go:351-363`)
-- [ ] Postgres `Find()` ignores tag filters — `Query.Tags` never translated into SQL conditions (`postgres.go:481-549`)
-- [ ] Cleanup ignores `DEAD_LETTER` status — dead-lettered commands accumulate forever in SQLite/Postgres; Memory uses `IsTerminal()` which correctly includes it (`sqlite.go:335`, `postgres.go:446`)
-- [ ] Workflow example has duplicate `Add` call — each iteration adds two commands, one without sequence (`examples/workflow/main.go:167-175`)
-- [ ] `NewFunc` doc references nonexistent `executor.Handle()` — should say `executor.Register()` (`func.go:130`)
+- [x] **DONE** `CancelByTag` missing `RecordEvent` — unlike `Cancel()`, no `EventCancelled` is recorded in history
+- [x] **DONE** Postgres `Find()` ignores tag filters — `Query.Tags` never translated into SQL conditions
+- [x] **DONE** Cleanup ignores `DEAD_LETTER` status — dead-lettered commands accumulate forever in SQLite/Postgres
+- [x] **DONE** Workflow example has duplicate `Add` call — each iteration adds two commands, one without sequence
+- [x] **DONE** `NewFunc` doc references nonexistent `executor.Handle()` — should say `executor.Register()`
 
 ## Security
 
@@ -24,11 +24,11 @@ Items marked **DONE** were addressed in commit `90b6e6e`.
 - [x] **DONE** Dashboard goroutine leaks on shutdown — no shutdown mechanism, port stays bound
 - [x] **DONE** Instance.Clone() shallow-copies Data/Metadata — nested maps share references
 - [ ] Partial child spawn failures corrupt fan-in — if some children fail to create, barrier gets fewer `childIDs` than intended, may trigger continuation prematurely (`executor.go:911-947`)
-- [ ] Shutdown timeout returns nil, leaks goroutines — if `shutdownTimeout` triggers, `Stop()` returns no error but workers keep running (`executor.go:207-222`)
-- [ ] `execute`/`executeClaimedCommand` massive duplication — two ~80-line methods share >90% identical code; only difference is "not ready" check and initial status update (`executor.go:648-816`)
+- [x] **DONE** Shutdown timeout returns nil, leaks goroutines — `Stop()` now returns error on timeout
+- [x] **DONE** `execute`/`executeClaimedCommand` massive duplication — unified into single execution path
 - [ ] Queue channel dead code in polling mode — `schedule()` pushes to `e.queue` but no `worker()` goroutines consume it in `LockingStorage` mode
 - [ ] Executor not reusable after Stop — context created once in `New()`, never recreated
-- [ ] `ContinueSequence` shallow-copies data — nested maps share references with original instance (`instance.go:165-172`)
+- [x] **DONE** `ContinueSequence` shallow-copies data — now uses `deepCopyMap` for nested maps
 - [ ] JSON deep copy silently coerces `int` → `float64` — `deepCopyMap` via JSON round-trip
 - [ ] `Typed()` helper silently swallows marshal errors — creates empty-data specs on failure (`typed.go:170-180`)
 - [ ] Recover silently skips on unmarshal failure in TypedCommand — user's compensation function never called (`typed.go:91-100`)
@@ -36,15 +36,16 @@ Items marked **DONE** were addressed in commit `90b6e6e`.
 
 ## Storage Layer
 
-- [ ] SQLite missing `QueryableStorage`/`LockingStorage` — only implements base `Storage`, CLI falls back to client-side filtering
-- [ ] `FindPending` doesn't filter by `ReadyAt` in Memory/SQLite — returns commands that aren't ready yet
+- [x] **DONE** SQLite missing `QueryableStorage` — now implements `QueryableStorage` with `Find()` method
+- [ ] SQLite missing `LockingStorage` — only single-instance mode supported
+- [x] **DONE** `FindPending` doesn't filter by `ReadyAt` in Memory/SQLite/Postgres — now filters `ready_at <= now`
 - [ ] Missing `unique_key` UNIQUE constraint at DB level — concurrent creates can race past `FindByUniqueKey`
 - [ ] SQLite missing `SetMaxOpenConns(1)` and `busy_timeout` PRAGMA — concurrent writes get "database is locked"
 - [ ] Missing composite index `(status, priority DESC, ready_at ASC)` for FindPending performance
 - [ ] `postgresTx` stubs out 6 of 10 Storage methods — `Get`, `Find*`, `Cleanup`, `Count` all return hard errors
 - [ ] Silenced `json.Marshal` errors in SQLite Create/Update and `postgresTx` — data corruption on failure (`sqlite.go:116-119`, `postgres.go:807-810`)
-- [ ] Latent `argNum++` missing after `CreatedBefore` in Postgres Find — **DONE** (fixed alongside OrderBy)
-- [ ] Duplicate compile-time assertion (`sqlite.go:16` and `595`)
+- [x] **DONE** Latent `argNum++` missing after `CreatedBefore` in Postgres Find
+- [x] **DONE** Duplicate compile-time assertion (`sqlite.go:16` and `595`) — removed duplicate
 
 ## API / Developer Experience
 
@@ -61,15 +62,15 @@ Items marked **DONE** were addressed in commit `90b6e6e`.
 
 - [x] **DONE** SQLite conformance tests — extracted `storagetest` package, 23/23 passing
 - [ ] Postgres conformance tests — test exists but requires `DUREX_TEST_POSTGRES_DSN` env var
-- [ ] Dashboard API — 0 tests for 6 HTTP endpoints
+- [x] **DONE** Dashboard API — tests for all HTTP endpoints (stats, commands, health, retry, cancel, history, index)
 - [ ] CLI commands — 0 tests for 7 command files
-- [ ] Dead Letter Queue — 0 tests for `ReplayFromDLQ`, `FindDeadLettered`, `PurgeDLQ`
-- [ ] Middleware chains — 0 tests for `executeWithMiddleware`
-- [ ] Rate limiter — 0 tests for entire `ratelimit.go`
-- [ ] Graceful shutdown — 0 tests for timeout, double-stop, concurrent add+stop
-- [ ] Polling worker mode — 0 tests for `pollingWorker`, `claimAndExecute`
-- [ ] `AddMany`, `CancelByTag` — 0 tests at executor level
-- [ ] `HookedStorage` — 0 tests
-- [ ] Stuck command recovery — 0 tests
-- [ ] Permanent commands — 0 tests
+- [x] **DONE** Dead Letter Queue — tests for `ReplayFromDLQ`, `FindDeadLettered`, `PurgeDLQ`
+- [x] **DONE** Middleware chains — tests for execution order, short-circuit, context passing
+- [x] **DONE** Rate limiter — tests for per-command limits, global limits, blocking acquire, stats, concurrency
+- [x] **DONE** Graceful shutdown — tests for timeout, double-stop, stop before start, add after stop
+- [x] **DONE** Polling worker mode — tests for basic execution, shutdown, retry on error
+- [x] **DONE** `AddMany`, `CancelByTag` — tests at executor level including partial failure and event recording
+- [x] **DONE** `HookedStorage` — tests for AfterCreate, AfterUpdate, AfterDelete, OnError, nil hooks
+- [x] **DONE** Stuck command recovery — tests for recovery of old commands, skip of recent commands
+- [x] **DONE** Permanent commands — tests for auto-start and repeat
 - [ ] Storage error injection — no tests for `Update` failing during `handleResult`/`handleError`

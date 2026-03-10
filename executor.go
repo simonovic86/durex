@@ -3,6 +3,7 @@ package durex
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -229,15 +230,17 @@ func (e *Executor) Stop() error {
 		close(done)
 	}()
 
+	var err error
 	select {
 	case <-done:
 		e.logger.Info("durex: executor stopped gracefully")
 	case <-time.After(e.shutdownTimeout):
 		e.logger.Warn("durex: executor shutdown timed out")
+		err = fmt.Errorf("durex: shutdown timed out after %v", e.shutdownTimeout)
 	}
 
 	e.started.Store(false)
-	return nil
+	return err
 }
 
 // startDashboard starts the dashboard HTTP server in a tracked goroutine.
