@@ -13,8 +13,8 @@ import (
 	"github.com/simonovic86/durex"
 	"github.com/simonovic86/durex/storage"
 
-	_ "github.com/mattn/go-sqlite3"
 	_ "github.com/lib/pq"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type DashboardCommand struct {
@@ -29,12 +29,12 @@ func NewDashboardCommand() *DashboardCommand {
 	cmd := &DashboardCommand{
 		flags: flag.NewFlagSet("dashboard", flag.ExitOnError),
 	}
-	
+
 	cmd.dbPath = cmd.flags.String("db", "", "Database path (required)")
 	cmd.dbType = cmd.flags.String("db-type", "sqlite", "Database type: sqlite or postgres")
 	cmd.port = cmd.flags.String("port", "8080", "Port to listen on")
 	cmd.host = cmd.flags.String("host", "localhost", "Host to bind to")
-	
+
 	return cmd
 }
 
@@ -55,13 +55,13 @@ func (c *DashboardCommand) Run(ctx context.Context) error {
 		if _, err := os.Stat(*c.dbPath); os.IsNotExist(err) {
 			return fmt.Errorf("database file does not exist: %s", *c.dbPath)
 		}
-		
+
 		db, err := sql.Open("sqlite3", *c.dbPath)
 		if err != nil {
 			return fmt.Errorf("failed to open sqlite database: %w", err)
 		}
 		defer db.Close()
-		
+
 		store = storage.NewSQLite(db)
 
 	case "postgres", "postgresql":
@@ -70,11 +70,11 @@ func (c *DashboardCommand) Run(ctx context.Context) error {
 			return fmt.Errorf("failed to open postgres database: %w", err)
 		}
 		defer db.Close()
-		
+
 		if err := db.Ping(); err != nil {
 			return fmt.Errorf("failed to connect to postgres: %w", err)
 		}
-		
+
 		store = storage.NewPostgres(db)
 
 	default:

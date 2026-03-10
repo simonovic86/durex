@@ -22,11 +22,11 @@ func NewCancelCommand() *CancelCommand {
 	cmd := &CancelCommand{
 		flags: flag.NewFlagSet("cancel", flag.ExitOnError),
 	}
-	
+
 	cmd.dbPath = cmd.flags.String("db", "", "Database path (required)")
 	cmd.dbType = cmd.flags.String("db-type", "sqlite", "Database type: sqlite or postgres")
 	cmd.tag = cmd.flags.String("tag", "", "Cancel all commands with this tag")
-	
+
 	return cmd
 }
 
@@ -34,7 +34,7 @@ func (c *CancelCommand) Parse(args []string) error {
 	if err := c.flags.Parse(args); err != nil {
 		return err
 	}
-	
+
 	// Get command ID from remaining args (unless using --tag)
 	remaining := c.flags.Args()
 	if *c.tag == "" {
@@ -43,7 +43,7 @@ func (c *CancelCommand) Parse(args []string) error {
 		}
 		c.id = remaining[0]
 	}
-	
+
 	return nil
 }
 
@@ -116,11 +116,11 @@ func (c *CancelCommand) cancelByTag(ctx context.Context, store durex.Storage) er
 		if cmd.Status.IsTerminal() {
 			continue
 		}
-		
+
 		cmd.Status = durex.StatusCancelled
 		cmd.CompletedAt = &now
 		cmd.RecordEvent(durex.EventCancelled, fmt.Sprintf("cancelled via CLI (tag: %s)", *c.tag))
-		
+
 		if err := store.Update(ctx, cmd); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to cancel %s: %v\n", cmd.ID, err)
 			continue

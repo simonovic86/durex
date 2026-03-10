@@ -8,8 +8,8 @@ import (
 	"github.com/simonovic86/durex"
 	"github.com/simonovic86/durex/storage"
 
-	_ "github.com/mattn/go-sqlite3"
 	_ "github.com/lib/pq"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // ConnectStorage creates a storage backend based on flags
@@ -24,12 +24,12 @@ func ConnectStorage(dbType, dbPath string) (durex.Storage, error) {
 		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 			return nil, fmt.Errorf("database file does not exist: %s", dbPath)
 		}
-		
+
 		db, err := sql.Open("sqlite3", dbPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open sqlite database: %w", err)
 		}
-		
+
 		return storage.NewSQLite(db), nil
 
 	case "postgres", "postgresql":
@@ -37,11 +37,11 @@ func ConnectStorage(dbType, dbPath string) (durex.Storage, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to open postgres database: %w", err)
 		}
-		
+
 		if err := db.Ping(); err != nil {
 			return nil, fmt.Errorf("failed to connect to postgres: %w", err)
 		}
-		
+
 		return storage.NewPostgres(db), nil
 
 	default:

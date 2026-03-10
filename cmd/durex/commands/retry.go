@@ -19,10 +19,10 @@ func NewRetryCommand() *RetryCommand {
 	cmd := &RetryCommand{
 		flags: flag.NewFlagSet("retry", flag.ExitOnError),
 	}
-	
+
 	cmd.dbPath = cmd.flags.String("db", "", "Database path (required)")
 	cmd.dbType = cmd.flags.String("db-type", "sqlite", "Database type: sqlite or postgres")
-	
+
 	return cmd
 }
 
@@ -30,13 +30,13 @@ func (c *RetryCommand) Parse(args []string) error {
 	if err := c.flags.Parse(args); err != nil {
 		return err
 	}
-	
+
 	// Get command ID from remaining args
 	remaining := c.flags.Args()
 	if len(remaining) == 0 {
 		return fmt.Errorf("command ID is required")
 	}
-	
+
 	c.id = remaining[0]
 	return nil
 }

@@ -22,12 +22,12 @@ func NewStatsCommand() *StatsCommand {
 	cmd := &StatsCommand{
 		flags: flag.NewFlagSet("stats", flag.ExitOnError),
 	}
-	
+
 	cmd.dbPath = cmd.flags.String("db", "", "Database path (required)")
 	cmd.dbType = cmd.flags.String("db-type", "sqlite", "Database type: sqlite or postgres")
 	cmd.command = cmd.flags.String("command", "", "Show stats for specific command name")
 	cmd.detailed = cmd.flags.Bool("detailed", false, "Show detailed breakdown by command")
-	
+
 	return cmd
 }
 
@@ -90,11 +90,11 @@ func (c *StatsCommand) Run(ctx context.Context) error {
 
 	// Print overall stats
 	fmt.Println("=== Durex Command Statistics ===\n")
-	
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "STATUS\tCOUNT\tPERCENTAGE")
 	fmt.Fprintln(w, "------\t-----\t----------")
-	
+
 	printStat := func(name string, count int64) {
 		pct := float64(0)
 		if total > 0 {
@@ -102,7 +102,7 @@ func (c *StatsCommand) Run(ctx context.Context) error {
 		}
 		fmt.Fprintf(w, "%s\t%d\t%.1f%%\n", name, count, pct)
 	}
-	
+
 	printStat("Pending", pending)
 	printStat("Started", started)
 	printStat("Completed", completed)
@@ -115,7 +115,7 @@ func (c *StatsCommand) Run(ctx context.Context) error {
 	}
 	fmt.Fprintln(w, "------\t-----\t----------")
 	printStat("TOTAL", total)
-	
+
 	w.Flush()
 
 	// Show detailed breakdown by command name if requested
@@ -158,7 +158,7 @@ func (c *StatsCommand) printDetailedStats(ctx context.Context, store durex.Stora
 		failed    int
 		total     int
 	}
-	
+
 	commandStats := make(map[string]*stats)
 	for _, cmd := range commands {
 		if _, ok := commandStats[cmd.Name]; !ok {
@@ -166,7 +166,7 @@ func (c *StatsCommand) printDetailedStats(ctx context.Context, store durex.Stora
 		}
 		s := commandStats[cmd.Name]
 		s.total++
-		
+
 		switch cmd.Status {
 		case durex.StatusPending:
 			s.pending++
@@ -183,12 +183,12 @@ func (c *StatsCommand) printDetailedStats(ctx context.Context, store durex.Stora
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "COMMAND\tTOTAL\tPENDING\tSTARTED\tCOMPLETED\tFAILED")
 	fmt.Fprintln(w, "-------\t-----\t-------\t-------\t---------\t------")
-	
+
 	for name, s := range commandStats {
 		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\n",
 			name, s.total, s.pending, s.started, s.completed, s.failed)
 	}
-	
+
 	w.Flush()
 	return nil
 }
@@ -222,7 +222,7 @@ func (c *StatsCommand) printCommandStats(ctx context.Context, store durex.Storag
 
 	for _, cmd := range commands {
 		totalAttempts += int64(cmd.Attempt)
-		
+
 		if cmd.Status == durex.StatusCompleted {
 			successCount++
 			if cmd.StartedAt != nil && cmd.CompletedAt != nil {

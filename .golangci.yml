@@ -7,11 +7,6 @@ linters:
     - staticcheck
     - unused
 
-linters-settings:
-  govet:
-    disable:
-      - buildir
-
 issues:
   exclude-rules:
     # Disable errcheck for test files - examples intentionally ignore errors for brevity
