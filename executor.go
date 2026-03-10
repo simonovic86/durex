@@ -68,6 +68,9 @@ type Executor struct {
 	delayedTimers   map[string]*time.Timer
 	delayedTimersMu sync.Mutex
 
+	// Mode-specific scheduling (set in Start based on storage type)
+	scheduleFn func(instance *Instance)
+
 	// Dashboard server for graceful shutdown
 	dashboardServer *http.Server
 }
@@ -135,6 +138,9 @@ func (e *Executor) Start(ctx context.Context) error {
 	)
 
 	if useLocking {
+		// Polling mode: scheduling is a no-op (polling workers discover pending instances)
+		e.scheduleFn = func(_ *Instance) {}
+
 		// Use polling workers that claim directly from storage
 		// This is safe for multi-instance deployments
 		for i := 0; i < e.parallelism; i++ {
@@ -142,6 +148,9 @@ func (e *Executor) Start(ctx context.Context) error {
 			go e.pollingWorker(i)
 		}
 	} else {
+		// Queue mode: use channel-based scheduling
+		e.scheduleFn = e.queueSchedule
+
 		// Use queue-based workers (single instance only)
 		for i := 0; i < e.parallelism; i++ {
 			e.wg.Add(1)
@@ -301,7 +310,7 @@ func (e *Executor) Add(ctx context.Context, spec Spec) (*Instance, error) {
 	// may immediately start modifying the instance (retries, status, etc.)
 	result := instance.Clone()
 
-	e.schedule(instance)
+	e.scheduleFn(instance)
 
 	e.logger.Debug("durex: command added",
 		"id", result.ID,
@@ -420,7 +429,7 @@ func (e *Executor) ReplayFromDLQ(ctx context.Context, id string) error {
 	}
 
 	// Schedule for execution
-	e.schedule(instance)
+	e.scheduleFn(instance)
 
 	e.logger.Info("durex: replayed command from DLQ",
 		"id", instance.ID,
@@ -537,13 +546,14 @@ func (e *Executor) worker(_ int) {
 			if !ok {
 				return
 			}
-			e.safeExecute(instance)
+			e.safeExecute(instance, false)
 		}
 	}
 }
 
 // safeExecute wraps execute with panic recovery.
-func (e *Executor) safeExecute(instance *Instance) {
+// If claimed is true, the instance was already transitioned to STARTED by ClaimPending().
+func (e *Executor) safeExecute(instance *Instance, claimed bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			e.logger.Error("durex: panic in command execution",
@@ -577,7 +587,7 @@ func (e *Executor) safeExecute(instance *Instance) {
 		}
 	}()
 
-	if err := e.execute(instance); err != nil {
+	if err := e.execute(instance, claimed); err != nil {
 		e.logger.Error("durex: command execution failed",
 			"id", instance.ID,
 			"name", instance.Name,
@@ -624,134 +634,15 @@ func (e *Executor) claimAndExecute(storage LockingStorage) {
 			return
 		}
 
-		e.safeExecuteClaimed(instance)
+		e.safeExecute(instance, true)
 	}
-}
-
-// safeExecuteClaimed wraps executeClaimedCommand with panic recovery.
-func (e *Executor) safeExecuteClaimed(instance *Instance) {
-	defer func() {
-		if r := recover(); r != nil {
-			e.logger.Error("durex: panic in command execution",
-				"id", instance.ID,
-				"name", instance.Name,
-				"panic", r,
-			)
-
-			// Mark the command as failed
-			instance.Status = StatusFailed
-			instance.Error = fmt.Sprintf("panic: %v", r)
-			now := time.Now()
-			instance.CompletedAt = &now
-
-			// Use a separate context with timeout for panic recovery updates
-			// to ensure the update succeeds even during shutdown when e.ctx is cancelled
-			updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			if err := e.storage.Update(updateCtx, instance); err != nil {
-				e.logger.Error("durex: failed to update panicked command",
-					"id", instance.ID,
-					"error", err,
-				)
-			}
-
-			// Call error handler if set
-			if e.errorHandler != nil {
-				e.errorHandler(instance, fmt.Errorf("panic: %v", r))
-			}
-		}
-	}()
-
-	if err := e.executeClaimedCommand(instance); err != nil {
-		e.logger.Error("durex: command execution failed",
-			"id", instance.ID,
-			"name", instance.Name,
-			"error", err,
-		)
-	}
-}
-
-// executeClaimedCommand executes a command that was already claimed (status=STARTED).
-func (e *Executor) executeClaimedCommand(instance *Instance) error {
-	baseCtx := e.ctx
-	now := time.Now()
-
-	// Check if cancelled
-	if e.stopping.Load() {
-		return nil
-	}
-
-	// Check deadline
-	if instance.DeadlineAt != nil && now.After(*instance.DeadlineAt) {
-		return e.handleExpired(baseCtx, instance)
-	}
-
-	// Resolve handler
-	handler, err := e.registry.Resolve(instance.Name)
-	if err != nil {
-		instance.Status = StatusFailed
-		instance.Error = err.Error()
-		return e.storage.Update(baseCtx, instance)
-	}
-
-	// Apply rate limiting
-	if e.rateLimiter != nil {
-		release, err := e.rateLimiter.Acquire(baseCtx, instance.Name)
-		if err != nil {
-			// Context cancelled, reschedule
-			instance.Status = StatusPending
-			return e.storage.Update(baseCtx, instance)
-		}
-		defer release()
-	}
-
-	// Collect metrics
-	if e.metrics != nil {
-		e.metrics.CommandStarted(instance.Name)
-	}
-
-	e.logger.Debug("durex: executing command",
-		"id", instance.ID,
-		"name", instance.Name,
-		"attempt", instance.Attempt,
-	)
-
-	// Create execution context with timeout if specified
-	execCtx := baseCtx
-	var cancel context.CancelFunc
-	if instance.Timeout > 0 {
-		execCtx, cancel = context.WithTimeout(baseCtx, instance.Timeout)
-		defer cancel()
-	}
-
-	// Execute with middleware
-	result, err := e.executeWithMiddleware(execCtx, instance, handler)
-
-	// Record duration
-	duration := time.Since(now)
-
-	// Check for timeout
-	if err == nil && execCtx.Err() == context.DeadlineExceeded {
-		err = fmt.Errorf("durex: command execution timed out after %v", instance.Timeout)
-	}
-
-	if err != nil {
-		if e.metrics != nil {
-			e.metrics.CommandFailed(instance.Name, err)
-		}
-		return e.handleError(baseCtx, instance, handler, err)
-	}
-
-	if e.metrics != nil {
-		e.metrics.CommandCompleted(instance.Name, duration)
-	}
-
-	return e.handleResult(baseCtx, instance, handler, result)
 }
 
 // execute runs a single command instance.
-func (e *Executor) execute(instance *Instance) error {
+// If claimed is true, the instance was already transitioned to STARTED status
+// by ClaimPending() (polling/locking mode). Otherwise, execute handles the
+// status transition itself (queue mode).
+func (e *Executor) execute(instance *Instance, claimed bool) error {
 	baseCtx := e.ctx
 	now := time.Now()
 
@@ -765,8 +656,9 @@ func (e *Executor) execute(instance *Instance) error {
 		return e.handleExpired(baseCtx, instance)
 	}
 
-	// Check if ready
-	if now.Before(instance.ReadyAt) {
+	// Queue mode: check if ready (polling mode never has this issue —
+	// ClaimPending only returns ready instances)
+	if !claimed && now.Before(instance.ReadyAt) {
 		e.scheduleDelayed(instance)
 		return nil
 	}
@@ -783,20 +675,27 @@ func (e *Executor) execute(instance *Instance) error {
 	if e.rateLimiter != nil {
 		release, err := e.rateLimiter.Acquire(baseCtx, instance.Name)
 		if err != nil {
-			// Context cancelled, reschedule
+			if claimed {
+				// Polling mode: reset to PENDING for next poll cycle
+				instance.Status = StatusPending
+				return e.storage.Update(baseCtx, instance)
+			}
+			// Queue mode: re-queue with delay
 			e.scheduleDelayed(instance)
 			return nil
 		}
 		defer release()
 	}
 
-	// Update status to started
-	instance.Status = StatusStarted
-	instance.StartedAt = &now
-	instance.Attempt++
-	instance.RecordEvent(EventStarted, "")
-	if err := e.storage.Update(baseCtx, instance); err != nil {
-		return err
+	// Queue mode: transition to STARTED (polling mode already did this in ClaimPending)
+	if !claimed {
+		instance.Status = StatusStarted
+		instance.StartedAt = &now
+		instance.Attempt++
+		instance.RecordEvent(EventStarted, "")
+		if err := e.storage.Update(baseCtx, instance); err != nil {
+			return err
+		}
 	}
 
 	// Collect metrics
@@ -914,7 +813,7 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 		if err := e.storage.Update(ctx, instance); err != nil {
 			return err
 		}
-		e.schedule(instance)
+		e.scheduleFn(instance)
 		return nil
 	}
 
@@ -930,7 +829,7 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 			if err := e.storage.Update(ctx, instance); err != nil {
 				return err
 			}
-			e.schedule(instance)
+			e.scheduleFn(instance)
 			return nil
 		}
 	}
@@ -971,7 +870,7 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 			continue
 		}
 		childIDs = append(childIDs, child.ID)
-		e.schedule(child)
+		e.scheduleFn(child)
 	}
 
 	// Spawn barrier command if there's a continuation
@@ -1018,7 +917,7 @@ func (e *Executor) handleResult(ctx context.Context, instance *Instance, _ Comma
 					"error", err,
 				)
 			} else {
-				e.schedule(barrier)
+				e.scheduleFn(barrier)
 				e.logger.Debug("durex: barrier command created",
 					"parent_id", instance.ID,
 					"barrier_id", barrier.ID,
@@ -1073,7 +972,7 @@ func (e *Executor) handleError(ctx context.Context, instance *Instance, handler 
 		if err := e.storage.Update(ctx, instance); err != nil {
 			return err
 		}
-		e.schedule(instance)
+		e.scheduleFn(instance)
 		return nil
 	}
 
@@ -1169,8 +1068,8 @@ func (e *Executor) handleExpired(ctx context.Context, instance *Instance) error 
 	return nil
 }
 
-// schedule adds an instance to the execution queue.
-func (e *Executor) schedule(instance *Instance) {
+// queueSchedule adds an instance to the execution queue (queue mode only).
+func (e *Executor) queueSchedule(instance *Instance) {
 	delay := time.Until(instance.ReadyAt)
 
 	if delay <= 0 {
@@ -1231,7 +1130,7 @@ func (e *Executor) replay(ctx context.Context) error {
 	}
 
 	for _, cmd := range commands {
-		e.schedule(cmd)
+		e.scheduleFn(cmd)
 	}
 
 	e.logger.Info("durex: replayed pending commands", "count", len(commands))
@@ -1340,10 +1239,7 @@ func (e *Executor) recoverStuckCommands() {
 			continue
 		}
 
-		// Schedule for execution (only in non-locking mode)
-		if _, ok := e.storage.(LockingStorage); !ok {
-			e.schedule(cmd)
-		}
+		e.scheduleFn(cmd)
 
 		recovered++
 	}

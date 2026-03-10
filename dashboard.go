@@ -283,7 +283,7 @@ func (e *Executor) handleAPIRetry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Schedule for execution
-	e.schedule(instance)
+	e.scheduleFn(instance)
 
 	e.logger.Info("durex: command retried via dashboard",
 		"id", instance.ID,
