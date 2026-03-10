@@ -45,35 +45,33 @@ func (b *barrierCommand) Execute(ctx context.Context, cmd *Instance) (Result, er
 		return Empty(), fmt.Errorf("barrier: failed to unmarshal data: %w", err)
 	}
 
-	if data.ExpectedCount == 0 {
+	if data.ExpectedCount == 0 || len(data.ChildIDs) == 0 {
 		// No children to wait for, spawn continuation immediately
 		return Next(data.Continuation), nil
 	}
 
-	// Find all children of the coordinator
-	children, err := b.executor.storage.FindByParent(ctx, data.CoordinatorID)
-	if err != nil {
-		return Empty(), fmt.Errorf("barrier: failed to find children: %w", err)
-	}
+	// Fetch each child by ID to check their status
+	var children []*Instance
+	var missingChildren []string
 
-	// Filter only the relevant children (not the barrier itself)
-	var relevantChildren []*Instance
-	for _, child := range children {
-		if child.Name != barrierCommandName {
-			relevantChildren = append(relevantChildren, child)
+	for _, childID := range data.ChildIDs {
+		child, err := b.executor.storage.Get(ctx, childID)
+		if err != nil {
+			// Child not found yet - may still be persisting
+			missingChildren = append(missingChildren, childID)
+			continue
 		}
+		children = append(children, child)
 	}
 
-	// Check if we have the expected number of children
-	if len(relevantChildren) != data.ExpectedCount {
-		// Still waiting for children to be created
-		// This can happen if the barrier is scheduled before all children are persisted
+	// If some children are missing, wait and retry
+	if len(missingChildren) > 0 {
 		cmd.Set("_barrier_check_count", cmd.GetInt("_barrier_check_count")+1)
 
 		// If we've checked too many times, something is wrong
 		if cmd.GetInt("_barrier_check_count") > 30 {
-			return Empty(), fmt.Errorf("barrier: timeout waiting for %d children (found %d)",
-				data.ExpectedCount, len(relevantChildren))
+			return Empty(), fmt.Errorf("barrier: timeout waiting for children (missing: %v)",
+				missingChildren)
 		}
 
 		// Poll again after interval (uses command's Period)
@@ -85,7 +83,7 @@ func (b *barrierCommand) Execute(ctx context.Context, cmd *Instance) (Result, er
 	anyFailed := false
 	failedChild := ""
 
-	for _, child := range relevantChildren {
+	for _, child := range children {
 		if !child.Status.IsTerminal() {
 			allComplete = false
 			break
@@ -116,15 +114,21 @@ func (b *barrierCommand) Execute(ctx context.Context, cmd *Instance) (Result, er
 		continuationData[k] = v
 	}
 
-	// Add results from each child with a prefix
-	for _, child := range relevantChildren {
-		prefix := fmt.Sprintf("_barrier_result_%s_", child.Name)
+	// Add results from each child with a prefix.
+	// Use child.ID (unique) to avoid collisions when multiple children share the same Name.
+	for _, child := range children {
+		idPrefix := fmt.Sprintf("_barrier_result_%s_", child.ID)
+		namePrefix := fmt.Sprintf("_barrier_result_%s_", child.Name)
 		for k, v := range child.Data {
 			// Skip internal barrier metadata
 			if k == "_barrier_check_count" || k == "_barrier_parent" {
 				continue
 			}
-			continuationData[prefix+k] = v
+			// Write under both ID-based key (unique) and name-based key (convenient).
+			// Name-based key may be overwritten if multiple children share a name;
+			// ID-based key is always safe.
+			continuationData[idPrefix+k] = v
+			continuationData[namePrefix+k] = v
 		}
 	}
 

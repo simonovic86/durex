@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/simonovic86/durex"
 )
+
+// validTableName matches only safe SQL identifiers (alphanumeric and underscores).
+var validTableName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // Compile-time interface assertions.
 var _ durex.Storage = (*SQLite)(nil)
@@ -34,6 +38,7 @@ func WithSQLiteTableName(name string) SQLiteOption {
 
 // NewSQLite creates a new SQLite storage.
 // The db connection should already be opened.
+// Panics if a custom table name contains invalid characters.
 func NewSQLite(db *sql.DB, opts ...SQLiteOption) *SQLite {
 	s := &SQLite{
 		db:        db,
@@ -42,6 +47,10 @@ func NewSQLite(db *sql.DB, opts ...SQLiteOption) *SQLite {
 
 	for _, opt := range opts {
 		opt(s)
+	}
+
+	if !validTableName.MatchString(s.tableName) {
+		panic(fmt.Sprintf("durex: invalid table name %q: must match [a-zA-Z_][a-zA-Z0-9_]*", s.tableName))
 	}
 
 	return s

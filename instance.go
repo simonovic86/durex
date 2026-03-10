@@ -186,11 +186,9 @@ func (i *Instance) ContinueSequence(additionalData M) Result {
 func (i *Instance) Clone() *Instance {
 	clone := *i
 
+	// Deep copy Data map using JSON marshal/unmarshal to handle nested structures
 	if i.Data != nil {
-		clone.Data = make(M)
-		for k, v := range i.Data {
-			clone.Data[k] = v
-		}
+		clone.Data = deepCopyMap(i.Data)
 	}
 
 	if i.Sequence != nil {
@@ -203,11 +201,9 @@ func (i *Instance) Clone() *Instance {
 		copy(clone.Tags, i.Tags)
 	}
 
+	// Deep copy Metadata map using JSON marshal/unmarshal to handle nested structures
 	if i.Metadata != nil {
-		clone.Metadata = make(M)
-		for k, v := range i.Metadata {
-			clone.Metadata[k] = v
-		}
+		clone.Metadata = deepCopyMap(i.Metadata)
 	}
 
 	if i.History != nil {
@@ -216,6 +212,37 @@ func (i *Instance) Clone() *Instance {
 	}
 
 	return &clone
+}
+
+// deepCopyMap performs a deep copy of a map using JSON marshal/unmarshal.
+// This ensures nested maps, slices, and objects are properly cloned.
+func deepCopyMap(m M) M {
+	if m == nil {
+		return nil
+	}
+
+	// Use JSON marshal/unmarshal for deep copy
+	data, err := json.Marshal(m)
+	if err != nil {
+		// Fallback to shallow copy if marshal fails
+		result := make(M, len(m))
+		for k, v := range m {
+			result[k] = v
+		}
+		return result
+	}
+
+	var result M
+	if err := json.Unmarshal(data, &result); err != nil {
+		// Fallback to shallow copy if unmarshal fails
+		result = make(M, len(m))
+		for k, v := range m {
+			result[k] = v
+		}
+		return result
+	}
+
+	return result
 }
 
 // RecordEvent appends an event to the command's history.

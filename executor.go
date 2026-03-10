@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -66,6 +67,9 @@ type Executor struct {
 	// Timer tracking for delayed commands
 	delayedTimers   map[string]*time.Timer
 	delayedTimersMu sync.Mutex
+
+	// Dashboard server for graceful shutdown
+	dashboardServer *http.Server
 }
 
 // New creates a new Executor with the given storage and options.
@@ -151,6 +155,9 @@ func (e *Executor) Start(ctx context.Context) error {
 		}
 	}
 
+	// Mark as started before launching permanent commands (they call Add which checks this flag)
+	e.started.Store(true)
+
 	// Start permanent commands
 	for _, name := range e.permanentCommands {
 		if err := e.startPermanentCommand(name); err != nil {
@@ -163,25 +170,20 @@ func (e *Executor) Start(ctx context.Context) error {
 
 	// Start cleanup routine
 	if e.cleanupInterval > 0 {
+		e.wg.Add(1)
 		go e.cleanupLoop()
 	}
 
 	// Start stuck command recovery routine
 	if e.stuckCheckInterval > 0 {
+		e.wg.Add(1)
 		go e.stuckCommandRecoveryLoop()
 	}
 
 	// Start dashboard if configured
 	if e.dashboardAddr != "" {
-		go func() {
-			e.logger.Info("durex: starting dashboard", "addr", e.dashboardAddr)
-			if err := e.ServeDashboard(e.dashboardAddr); err != nil {
-				e.logger.Error("durex: dashboard server error", "error", err)
-			}
-		}()
+		e.startDashboard()
 	}
-
-	e.started.Store(true)
 
 	return nil
 }
@@ -195,6 +197,15 @@ func (e *Executor) Stop() error {
 
 	e.stopping.Store(true)
 	e.logger.Info("durex: stopping executor")
+
+	// Shut down dashboard server if running
+	if e.dashboardServer != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := e.dashboardServer.Shutdown(shutdownCtx); err != nil {
+			e.logger.Error("durex: dashboard shutdown error", "error", err)
+		}
+	}
 
 	// Cancel all pending delayed timers to release resources
 	e.cancelDelayedTimers()
@@ -218,6 +229,25 @@ func (e *Executor) Stop() error {
 
 	e.started.Store(false)
 	return nil
+}
+
+// startDashboard starts the dashboard HTTP server in a tracked goroutine.
+func (e *Executor) startDashboard() {
+	e.dashboardServer = &http.Server{
+		Addr:         e.dashboardAddr,
+		Handler:      e.DashboardHandler(),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		e.logger.Info("durex: starting dashboard", "addr", e.dashboardAddr)
+		if err := e.dashboardServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			e.logger.Error("durex: dashboard server error", "error", err)
+		}
+	}()
 }
 
 // cancelDelayedTimers stops all pending delayed timers.
@@ -528,7 +558,12 @@ func (e *Executor) safeExecute(instance *Instance) {
 			now := time.Now()
 			instance.CompletedAt = &now
 
-			if err := e.storage.Update(e.ctx, instance); err != nil {
+			// Use a separate context with timeout for panic recovery updates
+			// to ensure the update succeeds even during shutdown when e.ctx is cancelled
+			updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := e.storage.Update(updateCtx, instance); err != nil {
 				e.logger.Error("durex: failed to update panicked command",
 					"id", instance.ID,
 					"error", err,
@@ -609,7 +644,12 @@ func (e *Executor) safeExecuteClaimed(instance *Instance) {
 			now := time.Now()
 			instance.CompletedAt = &now
 
-			if err := e.storage.Update(e.ctx, instance); err != nil {
+			// Use a separate context with timeout for panic recovery updates
+			// to ensure the update succeeds even during shutdown when e.ctx is cancelled
+			updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := e.storage.Update(updateCtx, instance); err != nil {
 				e.logger.Error("durex: failed to update panicked command",
 					"id", instance.ID,
 					"error", err,
@@ -1218,6 +1258,7 @@ func (e *Executor) startPermanentCommand(name string) error {
 
 // cleanupLoop periodically cleans up old commands.
 func (e *Executor) cleanupLoop() {
+	defer e.wg.Done()
 	ticker := time.NewTicker(e.cleanupInterval)
 	defer ticker.Stop()
 
@@ -1240,6 +1281,7 @@ func (e *Executor) cleanupLoop() {
 // Stuck commands are those in STARTED status for longer than stuckThreshold,
 // which may indicate a worker crash or process restart.
 func (e *Executor) stuckCommandRecoveryLoop() {
+	defer e.wg.Done()
 	ticker := time.NewTicker(e.stuckCheckInterval)
 	defer ticker.Stop()
 

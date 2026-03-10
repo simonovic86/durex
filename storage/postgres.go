@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/simonovic86/durex"
 )
+
+// validIdentifier matches only safe SQL identifiers (alphanumeric and underscores).
+var validIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // Compile-time interface assertions.
 var (
@@ -37,6 +41,7 @@ func WithTableName(name string) PostgresOption {
 
 // NewPostgres creates a new PostgreSQL storage.
 // The db connection should already be opened and configured.
+// Panics if a custom table name contains invalid characters.
 func NewPostgres(db *sql.DB, opts ...PostgresOption) *Postgres {
 	p := &Postgres{
 		db:        db,
@@ -45,6 +50,10 @@ func NewPostgres(db *sql.DB, opts ...PostgresOption) *Postgres {
 
 	for _, opt := range opts {
 		opt(p)
+	}
+
+	if !validIdentifier.MatchString(p.tableName) {
+		panic(fmt.Sprintf("durex: invalid table name %q: must match [a-zA-Z_][a-zA-Z0-9_]*", p.tableName))
 	}
 
 	return p
@@ -510,6 +519,7 @@ func (p *Postgres) Find(ctx context.Context, query durex.Query) ([]*durex.Instan
 	if query.CreatedBefore != nil {
 		conditions = append(conditions, fmt.Sprintf("created_at < $%d", argNum))
 		args = append(args, *query.CreatedBefore)
+		argNum++
 	}
 
 	whereClause := ""
@@ -519,6 +529,15 @@ func (p *Postgres) Find(ctx context.Context, query durex.Query) ([]*durex.Instan
 
 	orderBy := "created_at"
 	if query.OrderBy != "" {
+		// Validate against allowed column names to prevent SQL injection
+		allowedColumns := map[string]bool{
+			"id": true, "name": true, "status": true, "priority": true,
+			"created_at": true, "ready_at": true, "started_at": true,
+			"completed_at": true, "attempt": true, "retries": true,
+		}
+		if !allowedColumns[query.OrderBy] {
+			return nil, fmt.Errorf("durex: invalid order_by column %q", query.OrderBy)
+		}
 		orderBy = query.OrderBy
 	}
 	orderDir := "ASC"
