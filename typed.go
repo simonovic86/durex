@@ -94,7 +94,7 @@ func (c *TypedCommand[T]) Recover(ctx context.Context, cmd *Instance, err error)
 	}
 	var data T
 	if unmarshalErr := c.unmarshalData(cmd.Data, &data); unmarshalErr != nil {
-		return Empty(), nil
+		return Empty(), fmt.Errorf("failed to unmarshal recovery data: %w", unmarshalErr)
 	}
 	return c.recoverFn(ctx, data, cmd, err)
 }
@@ -155,28 +155,43 @@ func NewTyped[T any](name string, fn TypedExecuteFunc[T], opts ...TypedOption[T]
 //	})
 func HandleTyped[T any](e *Executor, name string, fn TypedExecuteFunc[T], opts ...TypedOption[T]) {
 	cmd := NewTyped(name, fn, opts...)
-	e.registry.Register(cmd)
+	e.registry.MustRegister(cmd)
 }
 
 // Typed creates a Spec with typed data.
 // The data struct is automatically converted to a map.
+// Returns an error if the data cannot be marshaled to JSON.
 //
 // Example:
 //
-//	executor.Add(ctx, durex.Typed("sendEmail", EmailData{
+//	spec, err := durex.Typed("sendEmail", EmailData{
 //	    To:      "user@example.com",
 //	    Subject: "Welcome!",
-//	}))
-func Typed[T any](name string, data T) Spec {
+//	})
+func Typed[T any](name string, data T) (Spec, error) {
 	// Convert struct to map
-	jsonBytes, _ := json.Marshal(data)
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return Spec{}, fmt.Errorf("failed to marshal data: %w", err)
+	}
 	var m M
-	_ = json.Unmarshal(jsonBytes, &m)
+	if err := json.Unmarshal(jsonBytes, &m); err != nil {
+		return Spec{}, fmt.Errorf("failed to unmarshal data to map: %w", err)
+	}
 
 	return Spec{
 		Name: name,
 		Data: m,
+	}, nil
+}
+
+// MustTyped is like Typed but panics on error.
+func MustTyped[T any](name string, data T) Spec {
+	spec, err := Typed(name, data)
+	if err != nil {
+		panic(fmt.Sprintf("durex: %v", err))
 	}
+	return spec
 }
 
 // Ensure TypedCommand implements interfaces.

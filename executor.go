@@ -112,9 +112,9 @@ func New(storage Storage, opts ...Option) *Executor {
 }
 
 // Register adds a command handler to the executor.
-// Must be called before Start.
+// Must be called before Start. Panics if the name is empty or already registered.
 func (e *Executor) Register(cmd Command) *Executor {
-	e.registry.Register(cmd)
+	e.registry.MustRegister(cmd)
 	return e
 }
 

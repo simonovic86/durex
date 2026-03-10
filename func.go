@@ -160,7 +160,7 @@ func NewFunc(name string, fn ExecuteFunc, opts ...FuncOption) *FuncCommand {
 //	)
 func (e *Executor) HandleFunc(name string, fn ExecuteFunc, opts ...FuncOption) *Executor {
 	cmd := NewFunc(name, fn, opts...)
-	e.registry.Register(cmd)
+	e.registry.MustRegister(cmd)
 	return e
 }
 

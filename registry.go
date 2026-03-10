@@ -19,26 +19,34 @@ func NewRegistry() *Registry {
 }
 
 // Register adds a command handler to the registry.
-// Panics if a handler with the same name is already registered.
-func (r *Registry) Register(cmd Command) {
+// Returns an error if the name is empty or a handler with the same name is already registered.
+func (r *Registry) Register(cmd Command) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	name := cmd.Name()
 	if name == "" {
-		panic("durex: command name cannot be empty")
+		return fmt.Errorf("durex: command name cannot be empty")
 	}
 
 	if _, exists := r.handlers[name]; exists {
-		panic(fmt.Sprintf("durex: command %q already registered", name))
+		return fmt.Errorf("durex: command %q already registered", name)
 	}
 
 	r.handlers[name] = cmd
+	return nil
 }
 
-// MustRegister is like Register but allows overwriting existing handlers.
-// Useful for testing or dynamic reconfiguration.
+// MustRegister is like Register but panics on error.
 func (r *Registry) MustRegister(cmd Command) {
+	if err := r.Register(cmd); err != nil {
+		panic(err.Error())
+	}
+}
+
+// Overwrite adds or replaces a command handler in the registry.
+// Useful for testing or dynamic reconfiguration.
+func (r *Registry) Overwrite(cmd Command) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

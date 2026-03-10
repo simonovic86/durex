@@ -64,10 +64,19 @@ func OpenSQLite(dsn string, opts ...SQLiteOption) (*SQLite, error) {
 		return nil, fmt.Errorf("failed to open sqlite: %w", err)
 	}
 
+	// SQLite should use a single connection to avoid SQLITE_BUSY errors.
+	db.SetMaxOpenConns(1)
+
 	// Enable WAL mode for better concurrency
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
+	}
+
+	// Set busy timeout to wait for locks instead of failing immediately.
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to set busy timeout: %w", err)
 	}
 
 	return NewSQLite(db, opts...), nil
@@ -122,10 +131,22 @@ func (s *SQLite) Migrate(ctx context.Context) error {
 
 // Create implements durex.Storage.
 func (s *SQLite) Create(ctx context.Context, cmd *durex.Instance) error {
-	data, _ := json.Marshal(cmd.Data)
-	sequence, _ := json.Marshal(cmd.Sequence)
-	tags, _ := json.Marshal(cmd.Tags)
-	metadata, _ := json.Marshal(cmd.Metadata)
+	data, err := json.Marshal(cmd.Data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %w", err)
+	}
+	sequence, err := json.Marshal(cmd.Sequence)
+	if err != nil {
+		return fmt.Errorf("failed to marshal sequence: %w", err)
+	}
+	tags, err := json.Marshal(cmd.Tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %w", err)
+	}
+	metadata, err := json.Marshal(cmd.Metadata)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
 
 	query := fmt.Sprintf(`
 		INSERT INTO %s (
@@ -137,7 +158,7 @@ func (s *SQLite) Create(ctx context.Context, cmd *durex.Instance) error {
 		)
 	`, s.tableName)
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, execErr := s.db.ExecContext(ctx, query,
 		cmd.ID,
 		cmd.Name,
 		string(data),
@@ -162,11 +183,11 @@ func (s *SQLite) Create(ctx context.Context, cmd *durex.Instance) error {
 		string(metadata),
 	)
 
-	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") {
+	if execErr != nil {
+		if strings.Contains(execErr.Error(), "UNIQUE constraint") {
 			return durex.ErrAlreadyExists
 		}
-		return err
+		return execErr
 	}
 
 	return nil
@@ -174,10 +195,22 @@ func (s *SQLite) Create(ctx context.Context, cmd *durex.Instance) error {
 
 // Update implements durex.Storage.
 func (s *SQLite) Update(ctx context.Context, cmd *durex.Instance) error {
-	data, _ := json.Marshal(cmd.Data)
-	sequence, _ := json.Marshal(cmd.Sequence)
-	tags, _ := json.Marshal(cmd.Tags)
-	metadata, _ := json.Marshal(cmd.Metadata)
+	data, err := json.Marshal(cmd.Data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %w", err)
+	}
+	sequence, err := json.Marshal(cmd.Sequence)
+	if err != nil {
+		return fmt.Errorf("failed to marshal sequence: %w", err)
+	}
+	tags, err := json.Marshal(cmd.Tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %w", err)
+	}
+	metadata, err := json.Marshal(cmd.Metadata)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
 
 	query := fmt.Sprintf(`
 		UPDATE %s SET
