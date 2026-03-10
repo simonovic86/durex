@@ -700,6 +700,9 @@ func (s *SQLite) Find(ctx context.Context, query durex.Query) ([]*durex.Instance
 	limitClause := ""
 	if query.Limit > 0 {
 		limitClause = fmt.Sprintf("LIMIT %d", query.Limit)
+	} else if query.Offset > 0 {
+		// SQLite requires LIMIT before OFFSET; use -1 for unlimited.
+		limitClause = "LIMIT -1"
 	}
 
 	offsetClause := ""

@@ -64,13 +64,13 @@ Items marked **DONE** were addressed in commits `90b6e6e`, `72d49e3`, or subsequ
 - [ ] Postgres conformance tests — test exists but requires `DUREX_TEST_POSTGRES_DSN` env var
 - [x] **DONE** Dashboard API — tests for all HTTP endpoints (stats, commands, health, retry, cancel, history, index)
 - [ ] CLI commands — 0 tests for 7 command files
-- [x] **DONE** Dead Letter Queue — tests for `ReplayFromDLQ`, `FindDeadLettered`, `PurgeDLQ`
-- [x] **DONE** Middleware chains — tests for execution order, short-circuit, context passing
-- [x] **DONE** Rate limiter — tests for per-command limits, global limits, blocking acquire, stats, concurrency
-- [x] **DONE** Graceful shutdown — tests for timeout, double-stop, stop before start, add after stop
-- [x] **DONE** Polling worker mode — tests for basic execution, shutdown, retry on error
-- [x] **DONE** `AddMany`, `CancelByTag` — tests at executor level including partial failure and event recording
-- [x] **DONE** `HookedStorage` — tests for AfterCreate, AfterUpdate, AfterDelete, OnError, nil hooks
-- [x] **DONE** Stuck command recovery — tests for recovery of old commands, skip of recent commands
-- [x] **DONE** Permanent commands — tests for auto-start and repeat
+- [ ] Dead Letter Queue — 0 tests for `ReplayFromDLQ`, `FindDeadLettered`, `PurgeDLQ`
+- [ ] Middleware chains — 0 tests for `executeWithMiddleware`
+- [ ] Rate limiter — 0 tests for entire `ratelimit.go`
+- [ ] Graceful shutdown — 0 tests for timeout, double-stop, concurrent add+stop
+- [ ] Polling worker mode — 0 tests for `pollingWorker`, `claimAndExecute`
+- [ ] `AddMany`, `CancelByTag` — 0 tests at executor level
+- [ ] `HookedStorage` — 0 tests
+- [ ] Stuck command recovery — 0 tests
+- [ ] Permanent commands — 0 tests
 - [ ] Storage error injection — no tests for `Update` failing during `handleResult`/`handleError`
