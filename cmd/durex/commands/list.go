@@ -13,21 +13,21 @@ import (
 )
 
 type ListCommand struct {
-	flags    *flag.FlagSet
-	dbPath   *string
-	dbType   *string
-	status   *string
-	name     *string
-	tag      *string
-	limit    *int
-	format   *string
+	flags  *flag.FlagSet
+	dbPath *string
+	dbType *string
+	status *string
+	name   *string
+	tag    *string
+	limit  *int
+	format *string
 }
 
 func NewListCommand() *ListCommand {
 	cmd := &ListCommand{
 		flags: flag.NewFlagSet("list", flag.ExitOnError),
 	}
-	
+
 	cmd.dbPath = cmd.flags.String("db", "", "Database path (required)")
 	cmd.dbType = cmd.flags.String("db-type", "sqlite", "Database type: sqlite or postgres")
 	cmd.status = cmd.flags.String("status", "", "Filter by status (pending, started, completed, failed, expired, cancelled, repeating)")
@@ -35,7 +35,7 @@ func NewListCommand() *ListCommand {
 	cmd.tag = cmd.flags.String("tag", "", "Filter by tag")
 	cmd.limit = cmd.flags.Int("limit", 50, "Maximum number of commands to show")
 	cmd.format = cmd.flags.String("format", "table", "Output format: table, json, or csv")
-	
+
 	return cmd
 }
 
@@ -52,26 +52,26 @@ func (c *ListCommand) Run(ctx context.Context) error {
 
 	// Build query
 	var commands []*durex.Instance
-	
+
 	// Use queryable storage if available
 	if qs, ok := store.(durex.QueryableStorage); ok {
 		query := durex.Query{
 			Limit: *c.limit,
 		}
-		
+
 		if *c.status != "" {
 			status := durex.Status(*c.status)
 			query.Status = &status
 		}
-		
+
 		if *c.name != "" {
 			query.Name = c.name
 		}
-		
+
 		if *c.tag != "" {
 			query.Tags = []string{*c.tag}
 		}
-		
+
 		commands, err = qs.Find(ctx, query)
 		if err != nil {
 			return fmt.Errorf("failed to query commands: %w", err)
@@ -91,7 +91,7 @@ func (c *ListCommand) Run(ctx context.Context) error {
 				return fmt.Errorf("failed to list commands: %w", err)
 			}
 		}
-		
+
 		// Apply additional filters
 		filtered := make([]*durex.Instance, 0, len(commands))
 		for _, cmd := range commands {
@@ -131,7 +131,7 @@ func (c *ListCommand) printTable(commands []*durex.Instance) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tNAME\tSTATUS\tCREATED\tATTEMPT\tERROR")
 	fmt.Fprintln(w, strings.Repeat("-", 80))
-	
+
 	for _, cmd := range commands {
 		id := TruncateString(cmd.ID, 20)
 		name := TruncateString(cmd.Name, 20)
@@ -139,13 +139,13 @@ func (c *ListCommand) printTable(commands []*durex.Instance) error {
 		created := cmd.CreatedAt.Format("2006-01-02 15:04")
 		attempt := fmt.Sprintf("%d", cmd.Attempt)
 		errMsg := TruncateString(cmd.Error, 30)
-		
+
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			id, name, status, created, attempt, errMsg)
 	}
-	
+
 	w.Flush()
-	
+
 	fmt.Printf("\nTotal: %d commands\n", len(commands))
 	return nil
 }

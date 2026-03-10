@@ -19,7 +19,7 @@ func main() {
 
 	// Get subcommand
 	cmd := os.Args[1]
-	
+
 	ctx := context.Background()
 
 	switch cmd {
