@@ -123,6 +123,7 @@ func (e *Executor) CancelByTag(ctx context.Context, tag string) (int, error) {
 		}
 		cmd.Status = StatusCancelled
 		cmd.CompletedAt = &now
+		cmd.RecordEvent(EventCancelled, "cancelled by tag: "+tag)
 		if err := e.storage.Update(ctx, cmd); err != nil {
 			e.logger.Error("durex: failed to cancel command",
 				"id", cmd.ID,

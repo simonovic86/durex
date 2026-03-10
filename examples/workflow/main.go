@@ -164,12 +164,9 @@ func main() {
 				orderNum++
 
 				// Add order workflow: validate → reserve → pay → ship → confirm
-				executor.Add(ctx, durex.MustTyped("validateOrder", order).
-					WithRetries(2))
-
-				// Set the sequence for the workflow
-				spec := durex.MustTyped("validateOrder", order)
-				spec.Sequence = []string{"reserveInventory", "processPayment", "shipOrder", "sendConfirmation"}
+				spec := durex.MustTyped("validateOrder", order).
+					WithRetries(2).
+					WithSequence("reserveInventory", "processPayment", "shipOrder", "sendConfirmation")
 
 				executor.Add(ctx, spec)
 				slog.Info("📥 New order received", "orderId", order.OrderID, "amount", order.Amount)

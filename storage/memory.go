@@ -97,6 +97,7 @@ func (m *Memory) Get(ctx context.Context, id string) (*durex.Instance, error) {
 }
 
 // FindPending implements durex.Storage.
+// Returns commands with active status where ReadyAt <= now.
 func (m *Memory) FindPending(ctx context.Context) ([]*durex.Instance, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -105,9 +106,10 @@ func (m *Memory) FindPending(ctx context.Context) ([]*durex.Instance, error) {
 		return nil, durex.ErrStorageClosed
 	}
 
+	now := time.Now()
 	var result []*durex.Instance
 	for _, cmd := range m.commands {
-		if cmd.Status.IsActive() {
+		if cmd.Status.IsActive() && !cmd.ReadyAt.After(now) {
 			result = append(result, cmd.Clone())
 		}
 	}

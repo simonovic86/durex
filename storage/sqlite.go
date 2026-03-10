@@ -17,7 +17,10 @@ import (
 var validTableName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // Compile-time interface assertions.
-var _ durex.Storage = (*SQLite)(nil)
+var (
+	_ durex.Storage          = (*SQLite)(nil)
+	_ durex.QueryableStorage = (*SQLite)(nil)
+)
 
 // SQLite is a SQLite storage implementation.
 // Good for single-instance deployments and development.
@@ -305,10 +308,11 @@ func (s *SQLite) FindPending(ctx context.Context) ([]*durex.Instance, error) {
 			period_ns, cron, error, attempt, metadata
 		FROM %s
 		WHERE status IN ('PENDING', 'STARTED', 'REPEATING')
+		AND ready_at <= ?
 		ORDER BY priority DESC, ready_at ASC
 	`, s.tableName)
 
-	return s.queryInstances(ctx, query)
+	return s.queryInstances(ctx, query, time.Now().Format(time.RFC3339Nano))
 }
 
 // FindByStatus implements durex.Storage.
@@ -374,7 +378,7 @@ func (s *SQLite) Cleanup(ctx context.Context, olderThan time.Duration) (int64, e
 
 	query := fmt.Sprintf(`
 		DELETE FROM %s
-		WHERE status IN ('COMPLETED', 'FAILED', 'EXPIRED', 'CANCELLED')
+		WHERE status IN ('COMPLETED', 'FAILED', 'EXPIRED', 'CANCELLED', 'DEAD_LETTER')
 		AND completed_at < ?
 	`, s.tableName)
 
@@ -633,5 +637,88 @@ func nullTimeStr(t *time.Time) any {
 	return t.Format(time.RFC3339Nano)
 }
 
-// Ensure SQLite implements the interface.
-var _ durex.Storage = (*SQLite)(nil)
+// Find implements durex.QueryableStorage.
+func (s *SQLite) Find(ctx context.Context, query durex.Query) ([]*durex.Instance, error) {
+	var conditions []string
+	var args []any
+
+	if query.Status != nil {
+		conditions = append(conditions, "status = ?")
+		args = append(args, *query.Status)
+	}
+
+	if query.Name != nil {
+		conditions = append(conditions, "name = ?")
+		args = append(args, *query.Name)
+	}
+
+	if query.ParentID != nil {
+		conditions = append(conditions, "parent_id = ?")
+		args = append(args, *query.ParentID)
+	}
+
+	if len(query.Tags) > 0 {
+		for _, tag := range query.Tags {
+			// SQLite stores tags as JSON array; use JSON contains check
+			conditions = append(conditions, "tags LIKE ?")
+			args = append(args, "%\""+tag+"\"%")
+		}
+	}
+
+	if query.CreatedAfter != nil {
+		conditions = append(conditions, "created_at > ?")
+		args = append(args, query.CreatedAfter.Format(time.RFC3339Nano))
+	}
+
+	if query.CreatedBefore != nil {
+		conditions = append(conditions, "created_at < ?")
+		args = append(args, query.CreatedBefore.Format(time.RFC3339Nano))
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	orderBy := "created_at"
+	if query.OrderBy != "" {
+		allowedColumns := map[string]bool{
+			"id": true, "name": true, "status": true, "priority": true,
+			"created_at": true, "ready_at": true, "started_at": true,
+			"completed_at": true, "attempt": true, "retries": true,
+		}
+		if !allowedColumns[query.OrderBy] {
+			return nil, fmt.Errorf("durex: invalid order_by column %q", query.OrderBy)
+		}
+		orderBy = query.OrderBy
+	}
+	orderDir := "ASC"
+	if query.OrderDesc {
+		orderDir = "DESC"
+	}
+
+	limitClause := ""
+	if query.Limit > 0 {
+		limitClause = fmt.Sprintf("LIMIT %d", query.Limit)
+	} else if query.Offset > 0 {
+		// SQLite requires LIMIT before OFFSET; use -1 for unlimited.
+		limitClause = "LIMIT -1"
+	}
+
+	offsetClause := ""
+	if query.Offset > 0 {
+		offsetClause = fmt.Sprintf("OFFSET %d", query.Offset)
+	}
+
+	sqlQuery := fmt.Sprintf(`
+		SELECT id, name, data, status, retries, sequence, parent_id, priority,
+			tags, unique_key, trace_id, correlation_id, created_at, ready_at, started_at, completed_at, deadline_at,
+			period_ns, cron, error, attempt, metadata
+		FROM %s
+		%s
+		ORDER BY %s %s
+		%s %s
+	`, s.tableName, whereClause, orderBy, orderDir, limitClause, offsetClause)
+
+	return s.queryInstances(ctx, sqlQuery, args...)
+}
