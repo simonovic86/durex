@@ -92,8 +92,8 @@ func main() {
 
 			// Spawn compensation commands
 			return durex.Spawn(
-				durex.Typed("releaseInventory", data),
-				durex.Typed("notifyFailure", FailureData{
+				durex.MustTyped("releaseInventory", data),
+				durex.MustTyped("notifyFailure", FailureData{
 					OrderID: data.OrderID,
 					Reason:  err.Error(),
 					Stage:   "payment",
@@ -164,11 +164,11 @@ func main() {
 				orderNum++
 
 				// Add order workflow: validate → reserve → pay → ship → confirm
-				executor.Add(ctx, durex.Typed("validateOrder", order).
+				executor.Add(ctx, durex.MustTyped("validateOrder", order).
 					WithRetries(2))
 
 				// Set the sequence for the workflow
-				spec := durex.Typed("validateOrder", order)
+				spec := durex.MustTyped("validateOrder", order)
 				spec.Sequence = []string{"reserveInventory", "processPayment", "shipOrder", "sendConfirmation"}
 
 				executor.Add(ctx, spec)

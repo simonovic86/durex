@@ -60,14 +60,21 @@ func WithDefaultTimeout(d time.Duration) Option {
 	}
 }
 
-// WithDefaultRepeatInterval sets the default period for repeating commands.
+// WithDefaultPeriod sets the default period for repeating commands.
 // Default is 1 minute.
-func WithDefaultRepeatInterval(d time.Duration) Option {
+func WithDefaultPeriod(d time.Duration) Option {
 	return func(e *Executor) {
 		if d > 0 {
 			e.defaultRepeatInterval = d
 		}
 	}
+}
+
+// WithDefaultRepeatInterval sets the default period for repeating commands.
+//
+// Deprecated: Use WithDefaultPeriod for consistency with Spec.Period.
+func WithDefaultRepeatInterval(d time.Duration) Option {
+	return WithDefaultPeriod(d)
 }
 
 // WithMaxDelay sets the maximum delay for scheduled commands.

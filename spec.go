@@ -152,3 +152,34 @@ func (s Spec) WithCorrelationID(correlationID string) Spec {
 	s.CorrelationID = correlationID
 	return s
 }
+
+// WithPeriod returns a copy of the Spec with the given repeat period.
+// When a command returns Repeat(), it will be rescheduled after this duration.
+// If both Cron and Period are set, Cron takes precedence.
+func (s Spec) WithPeriod(d time.Duration) Spec {
+	s.Period = d
+	return s
+}
+
+// WithCron returns a copy of the Spec with the given cron expression.
+// When a command returns Repeat(), it will be rescheduled based on this expression.
+// Uses standard cron format: "minute hour day-of-month month day-of-week"
+// If both Cron and Period are set, Cron takes precedence.
+func (s Spec) WithCron(expr string) Spec {
+	s.Cron = expr
+	return s
+}
+
+// WithSequence returns a copy of the Spec with the given sequence chain.
+// Commands in the sequence are executed in order after this command completes.
+func (s Spec) WithSequence(names ...string) Spec {
+	s.Sequence = names
+	return s
+}
+
+// WithDeadlineAt returns a copy of the Spec with the given absolute deadline.
+// If the command hasn't started by this time, Expired() is called instead.
+func (s Spec) WithDeadlineAt(t time.Time) Spec {
+	s.DeadlineAt = &t
+	return s
+}

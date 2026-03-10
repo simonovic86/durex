@@ -822,10 +822,22 @@ func (t *postgresTx) Rollback() error {
 
 // Create implements durex.Storage.
 func (t *postgresTx) Create(ctx context.Context, cmd *durex.Instance) error {
-	data, _ := json.Marshal(cmd.Data)
-	sequence, _ := json.Marshal(cmd.Sequence)
-	tags, _ := json.Marshal(cmd.Tags)
-	metadata, _ := json.Marshal(cmd.Metadata)
+	data, err := json.Marshal(cmd.Data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %w", err)
+	}
+	sequence, err := json.Marshal(cmd.Sequence)
+	if err != nil {
+		return fmt.Errorf("failed to marshal sequence: %w", err)
+	}
+	tags, err := json.Marshal(cmd.Tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %w", err)
+	}
+	metadata, err := json.Marshal(cmd.Metadata)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
 
 	query := fmt.Sprintf(`
 		INSERT INTO %s (
@@ -837,7 +849,7 @@ func (t *postgresTx) Create(ctx context.Context, cmd *durex.Instance) error {
 		)
 	`, t.tableName)
 
-	_, err := t.tx.ExecContext(ctx, query,
+	_, err = t.tx.ExecContext(ctx, query,
 		cmd.ID, cmd.Name, data, cmd.Status, cmd.Retries, sequence,
 		cmd.ParentID, cmd.Priority, tags, nullStr(cmd.UniqueKey),
 		nullStr(cmd.TraceID), nullStr(cmd.CorrelationID),
@@ -850,10 +862,22 @@ func (t *postgresTx) Create(ctx context.Context, cmd *durex.Instance) error {
 
 // Update implements durex.Storage.
 func (t *postgresTx) Update(ctx context.Context, cmd *durex.Instance) error {
-	data, _ := json.Marshal(cmd.Data)
-	sequence, _ := json.Marshal(cmd.Sequence)
-	tags, _ := json.Marshal(cmd.Tags)
-	metadata, _ := json.Marshal(cmd.Metadata)
+	data, err := json.Marshal(cmd.Data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %w", err)
+	}
+	sequence, err := json.Marshal(cmd.Sequence)
+	if err != nil {
+		return fmt.Errorf("failed to marshal sequence: %w", err)
+	}
+	tags, err := json.Marshal(cmd.Tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %w", err)
+	}
+	metadata, err := json.Marshal(cmd.Metadata)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
 
 	query := fmt.Sprintf(`
 		UPDATE %s SET
@@ -865,7 +889,7 @@ func (t *postgresTx) Update(ctx context.Context, cmd *durex.Instance) error {
 		WHERE id = $1
 	`, t.tableName)
 
-	_, err := t.tx.ExecContext(ctx, query,
+	_, err = t.tx.ExecContext(ctx, query,
 		cmd.ID, cmd.Name, data, cmd.Status, cmd.Retries, sequence,
 		cmd.ParentID, cmd.Priority, tags, nullStr(cmd.UniqueKey),
 		nullStr(cmd.TraceID), nullStr(cmd.CorrelationID), cmd.ReadyAt,
