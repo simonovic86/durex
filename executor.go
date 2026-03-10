@@ -101,6 +101,7 @@ func New(storage Storage, opts ...Option) *Executor {
 		ctx:                   ctx,
 		cancel:                cancel,
 		delayedTimers:         make(map[string]*time.Timer),
+		scheduleFn:            func(_ *Instance) {}, // no-op until Start() sets the real implementation
 	}
 
 	for _, opt := range opts {
